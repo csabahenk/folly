@@ -1,0 +1,25 @@
+AC_INIT(folly, 0.1)
+AC_CANONICAL_TARGET
+
+AM_INIT_AUTOMAKE
+
+AM_CONFIG_HEADER([config.h])
+
+AC_PROG_LIBTOOL
+AM_PROG_CC_C_O
+
+AC_CONFIG_FILES([Makefile
+                 app/nully/Makefile
+                 include/Makefile
+                 lib/Makefile])
+
+AC_CHECK_HEADER(queue.h, HAVE_QUEUE_H=1)
+
+case $target_os in
+    *linux*) os=linux;;
+esac
+
+AM_CONDITIONAL(HAVE_QUEUE_H, test x$HAVE_QUEUE_H = 1)
+AM_CONDITIONAL(LINUX, test "x$os" = xlinux)
+
+AC_OUTPUT
