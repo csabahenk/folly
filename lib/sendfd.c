@@ -12,11 +12,12 @@ WARRANTY.  IN PARTICULAR, THE AUTHOR MAKES NO REPRESENTATION OR WARRANTY
 OF ANY KIND CONCERNING THE MERCHANTABILITY OF THIS SOFTWARE OR ITS
 FITNESS FOR ANY PARTICULAR PURPOSE.
 */
-#include "a.h"
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <string.h>
 #include <errno.h>
+#include <err.h>
 
 #ifndef CMSG_ALIGN
 #	ifdef __sun__
@@ -91,7 +92,7 @@ recvfd(int s)
 	if((n=recvmsg(s, &msg, 0)) < 0)
 		return -1;
 	if(n == 0){
-		werrstr("unexpected EOF");
+		errno = EBADF;
 		return -1;
 	}
 	cmsg = CMSG_FIRSTHDR(&msg);

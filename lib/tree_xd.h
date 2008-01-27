@@ -386,11 +386,11 @@ struct {								\
 } while (/*CONSTCOND*/ 0)
 
 /* Generates prototypes and inline functions */
-#define	RB_PROTOTYPE(name, type, field, cmp)				\
-	RB_PROTOTYPE_INTERNAL(name, type, field, cmp,)
-#define	RB_PROTOTYPE_STATIC(name, type, field, cmp)			\
-	RB_PROTOTYPE_INTERNAL(name, type, field, cmp, __unused static)
-#define RB_PROTOTYPE_INTERNAL(name, type, field, cmp, attr)		\
+#define	RB_PROTOTYPE(name, type, field, cmp, key)			\
+	RB_PROTOTYPE_INTERNAL(name, type, field, cmp, key)
+#define	RB_PROTOTYPE_STATIC(name, type, field, cmp, key)		\
+	RB_PROTOTYPE_INTERNAL(name, type, field, cmp, key, __unused static)
+#define RB_PROTOTYPE_INTERNAL(name, type, field, cmp, key, attr)	\
 attr void name##_RB_INSERT_COLOR(struct name *, struct type *);		\
 attr void name##_RB_REMOVE_COLOR(struct name *, struct type *, struct type *);\
 attr struct type *name##_RB_REMOVE(struct name *, struct type *);	\
@@ -404,11 +404,11 @@ attr struct type *name##_RB_MINMAX(struct name *, int);			\
 /* Main rb operation.
  * Moves node close to the key of elm to top
  */
-#define	RB_GENERATE(name, type, field, cmp)				\
-	RB_GENERATE_INTERNAL(name, type, field, cmp,)
-#define	RB_GENERATE_STATIC(name, type, field, cmp)			\
-	RB_GENERATE_INTERNAL(name, type, field, cmp, __unused static)
-#define RB_GENERATE_INTERNAL(name, type, field, cmp, attr)		\
+#define	RB_GENERATE(name, type, field, cmp, key)			\
+	RB_GENERATE_INTERNAL(name, type, field, cmp, key)
+#define	RB_GENERATE_STATIC(name, type, field, cmp, key)			\
+	RB_GENERATE_INTERNAL(name, type, field, cmp, key,  __unused static)
+#define RB_GENERATE_INTERNAL(name, type, field, cmp, key, attr)		\
 attr void								\
 name##_RB_INSERT_COLOR(struct name *head, struct type *elm)		\
 {									\
@@ -608,7 +608,7 @@ name##_RB_INSERT(struct name *head, struct type *elm)			\
 	tmp = RB_ROOT(head);						\
 	while (tmp) {							\
 		parent = tmp;						\
-		comp = (cmp)(elm, parent);				\
+		comp = (cmp)(elm, key(parent));				\
 		if (comp < 0)						\
 			tmp = RB_LEFT(tmp, field);			\
 		else if (comp > 0)					\
@@ -631,12 +631,12 @@ name##_RB_INSERT(struct name *head, struct type *elm)			\
 									\
 /* Finds the node with the same key as elm */				\
 attr struct type *							\
-name##_RB_FIND(struct name *head, struct type *elm)			\
+name##_RB_FIND(struct name *head, void *elm)				\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
 	int comp;							\
 	while (tmp) {							\
-		comp = cmp(elm, tmp);					\
+		comp = cmp(elm, key(tmp));				\
 		if (comp < 0)						\
 			tmp = RB_LEFT(tmp, field);			\
 		else if (comp > 0)					\
@@ -649,13 +649,13 @@ name##_RB_FIND(struct name *head, struct type *elm)			\
 									\
 /* Finds the first node greater than or equal to the search key */	\
 attr struct type *							\
-name##_RB_NFIND(struct name *head, struct type *elm)			\
+name##_RB_NFIND(struct name *head, void *elm)				\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
 	struct type *tmp_ub = NULL;					\
 	int comp;							\
 	while (tmp) {							\
-		comp = cmp(elm, tmp);					\
+		comp = cmp(elm, key(tmp));				\
 		if (comp < 0) {						\
 			tmp_ub = tmp;					\
 			tmp = RB_LEFT(tmp, field);			\
