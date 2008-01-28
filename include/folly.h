@@ -43,7 +43,6 @@ struct fnode_ops {
 
 struct fvfs_param {
 	struct handler_spec *opmap;
-	void (*abort_folly)(struct fvfs *fv, char *msg);
 	size_t inbufsize;
 	size_t outbufsize;
 	struct fuse_init_out finit_out;
@@ -64,9 +63,6 @@ struct fvfs {
 	char *outbuf;
 	struct fnode *root_fnode;
 };
-
-static inline void
-abort_folly(struct fvfs *fv, char *msg) { fv->parm.abort_folly(fv, msg); }
 
 static inline struct fnode_ops *
 fops(struct fvfs *fv) { return fv->parm.fops; }
@@ -93,13 +89,10 @@ int acquire_fuse_fd(void);
 
 int folly_loop(struct fvfs_param *fvp);
 
-int write_fuse_answer(struct fvfs *fv, size_t len);
 int send_fuse_err(struct fvfs *fv, int errn);
 int send_fuse_data(struct fvfs *fv, size_t len, int errn);
 #define send_fuse_obj(fv, ans_struct, errn)		\
-	((errn) ?					\
-	 send_fuse_err(fv, errn) :			\
-	 write_fuse_answer(fv, sizeof(*(ans_struct))))
+	send_fuse_data(fv, sizeof(*(ans_struct)), errn)
 
 struct fnode *make_fnode(struct fvfs *fv, size_t privsize);
 struct fnode *insert_lookup_fnode(struct fvfs *fv, struct fnode *fn,
@@ -138,8 +131,8 @@ argnode(struct fvfs *fv)
 }
 
 #ifdef _DIAG
-#define DIAG(fv, args, ...)							\
-	if (fv->parm.diag)							\
+#define DIAG(fv, args, ...)			\
+	if (fv->parm.diag)			\
 		printf(args, ## __VA_ARGS__)
 #else
 #define DIAG(args ...)

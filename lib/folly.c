@@ -22,6 +22,8 @@ int recvfd(int s);
 #define DEFAULT_INBUFSIZE  (1 << 16)
 #define DEFAULT_OUTBUFSIZE DEFAULT_INBUFSIZE
 
+#define EEOF -2
+
 static int
 get_fuse_req(struct fvfs *fv)
 {
@@ -30,16 +32,16 @@ get_fuse_req(struct fvfs *fv)
 	bytes = read(fv->parm.fuse_fd, fv->inbuf, fv->parm.inbufsize + HEADSPACE);
 	if (bytes == -1) {
 		if (errno != ENODEV) {
-			abort_folly(fv, "fuse device read");
-			return -1;
+			warn("fuse device read");
+			return errno;
 		}
-		return 1;
+		return EEOF;
 	}
 #ifdef VALIDATE_INPUT
 	if (bytes < sizeof(finh(fv)) || bytes != finh(fv)->len ||
 	    finh(fv)->opcode >= FUSE_OPTABLE_SIZE ||
 	    !fv->optable[finh(fv)->opcode]) {
-		abort_folly(fv, "fuse protocol error");
+		warnx("fuse protocol error");
 		return -1;
 	}
 	/*
@@ -59,19 +61,20 @@ get_fuse_req(struct fvfs *fv)
 	return 0;
 }
 
-int
-write_fuse_answer(struct fvfs *fv, size_t len)
+static int
+write_fuse_answer(struct fvfs *fv)
 {
 	size_t bytes;
 
-	assert(len <= fv->parm.outbufsize + HEADSPACE);
-	fouh(fv)->len = sizeof(struct fuse_out_header) + len;
-	fouh(fv)->unique = finh(fv)->unique;
-
 	bytes = write(fv->parm.fuse_fd, fv->outbuf, fouh(fv)->len);
 	if (bytes < fouh(fv)->len) {
-		abort_folly(fv, "fuse protocol error");
-		return -1;
+		if (bytes == -1) {
+			warn("fuse device write");
+			return errno;
+		} else {
+			warnx("fuse protocol error");
+			return -1;
+		}
 	}
 	DIAG(fv, "  len %d, error \"%s\" [%d]\n", fouh(fv)->len,
 	     strerror(-fouh(fv)->error), -fouh(fv)->error);
@@ -79,21 +82,20 @@ write_fuse_answer(struct fvfs *fv, size_t len)
 }
 
 int
-send_fuse_err(struct fvfs *fv, int errn)
+send_fuse_data(struct fvfs *fv, size_t len, int errn)
 {
-	int error;
-
+	assert(len <= fv->parm.outbufsize + HEADSPACE);
+	fouh(fv)->len = sizeof(struct fuse_out_header) + len;
+	fouh(fv)->unique = finh(fv)->unique;
 	fouh(fv)->error = -errn;
-	error = write_fuse_answer(fv, 0);
-	fouh(fv)->error = 0;
 
-	return error;
+	return 0;
 }
 
 int
-send_fuse_data(struct fvfs *fv, size_t len, int errn)
+send_fuse_err(struct fvfs *fv, int errn)
 {
-	return errn ? send_fuse_err(fv, errn) : write_fuse_answer(fv, len);
+	return send_fuse_data(fv, 0, errn);
 }
 
 static int
@@ -105,12 +107,8 @@ folly_init0(struct fvfs *fv)
 	DIAG(fv, " kernel FUSE version %d.%d\n", fini->major, fini->minor);
 	if (fini->major != FUSE_KERNEL_VERSION ||
 	    fini->minor < FUSE_KERNEL_MINOR_VERSION) {
-		char msg[512];
-
-		snprintf(msg, sizeof(msg),
-		         "unsupported proto version %d.%d from kernel",
-		         fini->major, fini->minor);
-		abort_folly(fv, msg);
+		warnx("unsupported proto version %d.%d from kernel",
+		      fini->major, fini->minor);
 		return -1;
 	}
 
@@ -124,7 +122,7 @@ folly_init0(struct fvfs *fv)
 int
 folly_init(struct fvfs *fv)
 {
-	abort_folly(fv, "fuse protocol error");
+	warnx("fuse protocol error");
 
 	return -1;
 }
@@ -133,12 +131,6 @@ int
 folly_default_handler(struct fvfs *fv)
 {
 	return send_fuse_err(fv, ENOSYS);
-}
-
-static void
-default_abort_folly(struct fvfs *fv, char *msg)
-{
-	errno ? err(1, msg) : errx(1, msg);
 }
 
 int
@@ -192,8 +184,6 @@ init_fvfs_param(struct fvfs_param *fvp)
 		fvp->inbufsize = DEFAULT_INBUFSIZE;
 	if (!fvp->outbufsize)
 		fvp->outbufsize = DEFAULT_OUTBUFSIZE;
-	if (!fvp->abort_folly)
-		fvp->abort_folly = default_abort_folly;
 	fvp->fops = &list_fnode_ops;
 } 	
 
@@ -210,7 +200,7 @@ folly_loop(struct fvfs_param *fvp)
 	memcpy(&fv.parm, fvp, sizeof(*fvp));
 
 	if (fvp->fuse_fd < 0) {
-		abort_folly(&fv, "cannot identify fuse device");
+		warnx("cannot identify fuse device");
 		return ENODEV;
 	}
 
@@ -223,41 +213,44 @@ folly_loop(struct fvfs_param *fvp)
 
 	fv.inbuf = malloc(fvp->inbufsize + HEADSPACE);
 	if (!fv.inbuf) {
-		abort_folly(&fv, "cannot allocate input buffer");
+		warnx("cannot allocate input buffer");
 		goto out;
 	}
 	fv.outbuf = malloc(fvp->outbufsize + HEADSPACE);
 	if (!fv.outbuf) {
-		abort_folly(&fv, "cannot allocate output buffer");
+		warnx("cannot allocate output buffer");
 		goto out;
 	}
 	fv.root_fnode = make_fnode(&fv, 0);
 	if (!fv.root_fnode) {
-		abort_folly(&fv, "cannot create root node");
+		warnx("cannot create root node");
 		goto out;
 	}
 	fv.root_fnode->priv = fvp->root_fnode_priv;
 
 	if (get_fuse_req(&fv)) {
-		abort_folly(&fv, "fuse handshake failed");
+		warnx("fuse handshake failed");
 		goto out;
 	}
 
 	if (finh(&fv)->opcode != FUSE_INIT) {
-		abort_folly(&fv, "fuse protocol error");
+		warnx("fuse protocol error");
 		goto out;
 	}
-	if (folly_init0(&fv))
+	errn = (folly_init0(&fv) || write_fuse_answer(&fv));
+	if (errn)
 		goto out;
 
 	for (;;) {
 		errn = get_fuse_req(&fv);
 		if (errn) {
-			if (errn == 1)
+			if (errn == EEOF)
 				errn = 0;
 			goto out;
 		}
-		if (fv.optable[finh(&fv)->opcode](&fv))
+		errn = (fv.optable[finh(&fv)->opcode](&fv) ||
+		        write_fuse_answer(&fv));
+		if (errn)
 			goto out;
 	}
 
