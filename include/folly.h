@@ -145,11 +145,4 @@ argnode(struct fvfs *fv)
 #define DIAG(args ...)
 #endif
 
-#if 0
-#define DEBUG(args, ...)							\
-	printf(">> %s <%s@%d>: " args, __func__, __FILE__, __LINE__, ## __VA_ARGS__)
-#elif 1
-#define DEBUG(args ...)
-#endif
-
 #endif /* !FOLLY_H */

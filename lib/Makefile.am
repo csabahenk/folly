@@ -5,7 +5,7 @@ libfolly_la_SOURCES= 	\
 	folly_nodeops.c
 	tree_xd.h
 
-if !HAVE_QUEUE_H
+if !HAVE_SYS_QUEUE_H
 libfolly_la_SOURCES+=	queue.h
 endif
 

@@ -3,7 +3,11 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#ifdef HAVE_SYS_QUEUE_H
+#include <sys/queue.h>
+#else
 #include "queue.h"
+#endif
 #include "tree_xd.h"
 #include "folly.h"
 

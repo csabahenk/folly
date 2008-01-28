@@ -11,15 +11,30 @@ AM_PROG_CC_C_O
 AC_CONFIG_FILES([Makefile
                  app/nully/Makefile
                  include/Makefile
-                 lib/Makefile])
+                 lib/Makefile
+                 folly.pc])
 
-AC_CHECK_HEADER(queue.h, HAVE_QUEUE_H=1)
+AC_CHECK_HEADER(sys/queue.h,
+                [AC_DEFINE(HAVE_SYS_QUEUE_H, 1, [Define to 1 if you have <sys/queue.h>.])])
+
+AC_ARG_ENABLE(diag,
+              [  --disable-diag  Disable diagnostic messages ])
+
+AC_ARG_WITH(pkgconfigdir,
+            [  --with-pkgconfigdir=DIR      pkgconfig file in DIR @<:@LIBDIR/pkgconfig@:>@],
+            [pkgconfigdir=$withval],
+            [pkgconfigdir='${libdir}/pkgconfig'])
+AC_SUBST(pkgconfigdir)
 
 case $target_os in
     *linux*) os=linux;;
 esac
 
-AM_CONDITIONAL(HAVE_QUEUE_H, test x$HAVE_QUEUE_H = 1)
-AM_CONDITIONAL(LINUX, test "x$os" = xlinux)
+if ! test "$enable_diag" = "no"; then
+    AC_DEFINE(_DIAG, 1, [Enable diagnostic messages])
+fi
+
+AM_CONDITIONAL(HAVE_SYS_QUEUE_H, test "$HAVE_SYS_QUEUE_H" = "1")
+AM_CONDITIONAL(LINUX, test "$os" = "linux")
 
 AC_OUTPUT

@@ -1,5 +1,6 @@
 #ifdef linux
 #define _XOPEN_SOURCE 500
+#define _FILE_OFFSET_BITS 64
 #endif
 
 #include <sys/stat.h>
@@ -17,6 +18,9 @@
 #include <err.h>
 #include <assert.h>
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 #include "folly.h"
 
 typedef int (*nully_handler_t)(struct fvfs *fv, char *path);

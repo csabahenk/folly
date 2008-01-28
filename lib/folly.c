@@ -6,6 +6,9 @@
 #include <err.h>
 #include <assert.h>
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
 #include "folly.h"
 
 #ifdef linux
@@ -233,7 +236,6 @@ folly_loop(struct fvfs_param *fvp)
 		abort_folly(&fv, "cannot create root node");
 		goto out;
 	}
-	DEBUG("root node %p\n", fv.root_fnode);
 	fv.root_fnode->priv = fvp->root_fnode_priv;
 
 	if (get_fuse_req(&fv)) {
@@ -294,7 +296,7 @@ insert_lookup_fnode(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
 
 	xfn = fops(fv)->insert(fn, cfn);
 	if (xfn) {
-		free(cfn);
+		fops(fv)->gc(fv, cfn);
 		return xfn;
 	}
 
