@@ -275,6 +275,12 @@ make_fnode(struct fvfs *fv, size_t privsize)
 	fn->treedata = fn + 1;
 	fn->priv = (char *)fn->treedata + fops(fv)->treedata_size;
 	fn->nlookup = 1;
+#ifdef MARK_FOLLY
+	if (fn->mark == FOLLYMARKER)
+		warnx("weird: freshly allocated area %p for an fnode is already marked",
+		      fn);
+	fn->mark = FOLLYMARKER;
+#endif
 
 	if (fops(fv)->init)
 		fops(fv)->init(fv, fn);

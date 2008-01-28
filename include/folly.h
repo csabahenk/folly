@@ -9,12 +9,17 @@
 #define FOLLY_MAJOR 0
 #define FOLLY_MINOR 1
 
+#define FOLLYMARKER 0xf0111101
+
 typedef uint64_t f_ino_t;
 
 struct fnode {
 	uint64_t nlookup;
 	void *treedata;
 	void *priv;
+#ifdef MARK_FOLLY
+	uint32_t mark;
+#endif
 };
 
 struct fvfs;
@@ -113,8 +118,16 @@ folly_handler_t folly_forget;
 static inline struct fnode *
 fi2fn(struct fvfs *fv, f_ino_t nid)
 {
-	return (struct fnode *)
+	struct fnode *fn;
+
+	fn = (struct fnode *)
           ((uintptr_t)(nid - FUSE_ROOT_ID) + (uintptr_t)fv->root_fnode);
+
+#ifdef MARK_FOLLY
+	assert(fn->mark == FOLLYMARKER);
+#endif
+
+	return fn;
 }
 
 static inline f_ino_t
@@ -128,6 +141,16 @@ static inline struct fnode *
 argnode(struct fvfs *fv)
 {
 	return fi2fn(fv, finh(fv)->nodeid);
+}
+
+static inline void
+free_fnode(struct fnode *fn)
+{
+#ifdef MARK_FOLLY
+	assert(fn->mark == FOLLYMARKER);
+	fn->mark = 0;
+#endif
+	free(fn);
 }
 
 #ifdef _DIAG

@@ -28,7 +28,7 @@ fnode_iterables_gc(struct fvfs *fv, struct fnode *fn)
 		  ((struct iterables_treedata *)fn->treedata)->par_fnode,
 		  fn);
 
-	free(fn);
+	free_fnode(fn);
 	if (fn == fv->root_fnode)
 		fv->root_fnode = NULL;
 
