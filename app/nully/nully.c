@@ -23,10 +23,10 @@
 #endif
 #include "folly.h"
 
-typedef int (*nully_handler_t)(struct fvfs *fv, char *path);
+typedef int (nully_handler_t)(struct fvfs *fv, char *path);
 
 static char pbuf[PATH_MAX + NAME_MAX + 2];
-static nully_handler_t nully_optable[FUSE_OPTABLE_SIZE];
+static nully_handler_t *nully_path_optable[FUSE_OPTABLE_SIZE];
 
 struct nully_priv {
 	char *name;
@@ -105,7 +105,7 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 }
 
 static int
-nully_handler(struct fvfs *fv)
+nully_path_dispatch(struct fvfs *fv)
 {
 	char *path;
 
@@ -114,7 +114,7 @@ nully_handler(struct fvfs *fv)
 
 	if (path) {
 		errno = 0;
-		return nully_optable[finh(fv)->opcode](fv, path);
+		return nully_path_optable[finh(fv)->opcode](fv, path);
 	} else
 		return send_fuse_err(fv, errno);
 }
@@ -636,10 +636,12 @@ nully_node_key(struct fnode *fn)
 	return pri(fn)->name;
 }
 
-static struct {
+struct nully_handler_spec {
 	enum fuse_opcode opcode;
-	nully_handler_t handler;
-} nully_path_opmap[] = {
+	nully_handler_t *handler;
+};
+
+static struct nully_handler_spec nully_path_opmap[] = {
 	{ FUSE_STATFS,      nully_statfs   },
 	{ FUSE_GETATTR,     nully_getattr  },
 	{ FUSE_LOOKUP,      nully_lookup   },
@@ -656,9 +658,10 @@ static struct {
 	{ FUSE_RENAME,      nully_rename   },
 	{ FUSE_ACCESS,      nully_access   },
 	{ FUSE_READLINK,    nully_readlink },
+	{0,                 0              }
 };
 
-struct handler_spec nully_opmap[] = {
+static struct handler_spec nully_opmap[] = {
 	{ FUSE_READDIR,     nully_readdir    },
 	{ FUSE_READ,        nully_read       },
 	{ FUSE_WRITE,       nully_write      },
@@ -672,8 +675,8 @@ struct handler_spec nully_opmap[] = {
 int
 main(int argc, char **argv)
 {
-	struct handler_spec nully_opmap2[FUSE_OPTABLE_SIZE];
-	struct handler_spec *hp;
+	struct handler_spec *hp = nully_opmap;
+	struct nully_handler_spec *nhp = nully_path_opmap;
 	struct fvfs_param fvp;
 	struct iterables_vfs_treedata ivdat;
 	int i = 1;
@@ -697,25 +700,13 @@ main(int argc, char **argv)
 	if (chdir(null_root) == -1)
 		err(1, "can't enter null root");
 
-	/* assemble the final opmap */
-	for (i = 0;
-	     i < sizeof(nully_path_opmap) / sizeof(nully_path_opmap[0]);
-	     i++) {
-		nully_opmap2[i].opcode  = nully_path_opmap[i].opcode;
-		nully_opmap2[i].handler = nully_handler;
-		nully_optable[nully_path_opmap[i].opcode] = nully_path_opmap[i].handler;
-	}
-	hp = nully_opmap;
-	for (;;) {
-		nully_opmap2[i] = *hp;
-		if (!hp->opcode)
-			break;
-		hp++;
-		i++;
-	}
+	/* assemble the optables */
+	add_opmap(nhp, nully_path_optable);
+	add_opmap(hp, fvp.optable);
+	for (nhp = nully_path_opmap; nhp->opcode; nhp++)
+		fvp.optable[nhp->opcode] = nully_path_dispatch;
 
 	/* set other params */
-	fvp.opmap = nully_opmap2;
 	ivdat.compare = nully_node_cmp;
 	ivdat.key = nully_node_key;
 	fvp.vfs_treedata = &ivdat;

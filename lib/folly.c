@@ -185,7 +185,19 @@ init_fvfs_param(struct fvfs_param *fvp)
 	if (!fvp->outbufsize)
 		fvp->outbufsize = DEFAULT_OUTBUFSIZE;
 	fvp->fops = &list_fnode_ops;
+	make_default_optable(fvp->optable);
 } 	
+
+void
+make_default_optable(folly_handler_t **optable)
+{
+	int i;
+
+	for (i = 0; i < FUSE_OPTABLE_SIZE; i++)
+		optable[i] = fuse_opnames[i] ? folly_default_handler : NULL;
+	optable[FUSE_INIT] = folly_init;
+	optable[FUSE_FORGET] = folly_forget;
+}
 
 int
 folly_loop(struct fvfs_param *fvp)
@@ -199,17 +211,10 @@ folly_loop(struct fvfs_param *fvp)
 	objzero(&fv);
 	memcpy(&fv.parm, fvp, sizeof(*fvp));
 
-	if (fvp->fuse_fd < 0) {
+	if (fv.parm.fuse_fd < 0) {
 		warnx("cannot identify fuse device");
 		return ENODEV;
 	}
-
-	for (i = 0; i < FUSE_OPTABLE_SIZE; i++)
-		fv.optable[i] = fuse_opnames[i] ? folly_default_handler : NULL;
-	fv.optable[FUSE_INIT] = folly_init;
-	fv.optable[FUSE_FORGET] = folly_forget;
-	for (hp = fvp->opmap; hp->opcode; hp++)
-		fv.optable[hp->opcode] = hp->handler;
 
 	fv.inbuf = malloc(fvp->inbufsize + HEADSPACE);
 	if (!fv.inbuf) {
@@ -248,7 +253,7 @@ folly_loop(struct fvfs_param *fvp)
 				errn = 0;
 			goto out;
 		}
-		errn = (fv.optable[finh(&fv)->opcode](&fv) ||
+		errn = (fv.parm.optable[finh(&fv)->opcode](&fv) ||
 		        write_fuse_answer(&fv));
 		if (errn)
 			goto out;

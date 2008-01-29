@@ -47,7 +47,7 @@ struct fnode_ops {
 };
 
 struct fvfs_param {
-	struct handler_spec *opmap;
+	folly_handler_t *optable[FUSE_OPTABLE_SIZE];
 	size_t inbufsize;
 	size_t outbufsize;
 	struct fuse_init_out finit_out;
@@ -63,7 +63,6 @@ void init_fvfs_param(struct fvfs_param *fvp);
 
 struct fvfs {
 	struct fvfs_param parm;
-	folly_handler_t *optable[FUSE_OPTABLE_SIZE];
 	char *inbuf;
 	char *outbuf;
 	struct fnode *root_fnode;
@@ -151,6 +150,14 @@ free_fnode(struct fnode *fn)
 	fn->mark = 0;
 #endif
 	free(fn);
+}
+
+void make_default_optable(folly_handler_t **optable);
+
+#define add_opmap(hspec, optable)				\
+{								\
+	for(; (hspec)->opcode; (hspec)++)			\
+		optable[(hspec)->opcode] = (hspec)->handler;	\
 }
 
 #ifdef _DIAG
