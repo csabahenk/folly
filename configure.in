@@ -1,4 +1,4 @@
-AC_INIT(folly, 0.1)
+AC_INIT(folly, m4_esyscmd([cat VERSION | tr -d '\n']))
 AC_CANONICAL_TARGET
 
 AM_INIT_AUTOMAKE
@@ -42,5 +42,8 @@ fi
 
 AM_CONDITIONAL(HAVE_SYS_QUEUE_H, test "$HAVE_SYS_QUEUE_H" = "1")
 AM_CONDITIONAL(LINUX, test "$os" = "linux")
+
+LIBTOOL_VERSNUM=`echo $PACKAGE_VERSION | sed 's/\./:/g'`
+AC_SUBST(LIBTOOL_VERSNUM)
 
 AC_OUTPUT

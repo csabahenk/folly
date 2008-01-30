@@ -13,4 +13,6 @@ if LINUX
 libfolly_la_SOURCES+=	sendfd.c
 endif
 
-libfolly_la_CFLAGS=	-I$(top_builddir)/include 
+libfolly_la_CFLAGS=	-I$(top_builddir)/include
+
+libfolly_la_LDFLAGS = -version-number $(LIBTOOL_VERSNUM)
