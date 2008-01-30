@@ -85,7 +85,7 @@ int
 send_fuse_data(struct fvfs *fv, size_t len, int errn)
 {
 	assert(len <= fv->parm.outbufsize + HEADSPACE);
-	fouh(fv)->len = sizeof(struct fuse_out_header) + len;
+	fouh(fv)->len = sizeof(struct fuse_out_header) + (errn ? 0 : len);
 	fouh(fv)->unique = finh(fv)->unique;
 	fouh(fv)->error = -errn;
 
