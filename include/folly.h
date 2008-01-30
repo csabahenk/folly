@@ -154,10 +154,16 @@ free_fnode(struct fnode *fn)
 
 void make_default_optable(folly_handler_t **optable);
 
-#define add_opmap(hspec, optable)				\
+#define add_opmap_generic(hspec, optable)			\
 {								\
 	for(; (hspec)->opcode; (hspec)++)			\
 		optable[(hspec)->opcode] = (hspec)->handler;	\
+}
+
+static inline void
+add_opmap(struct handler_spec *hp, folly_handler_t **optable)
+{
+	add_opmap_generic(hp, optable);
 }
 
 #ifdef _DIAG

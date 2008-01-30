@@ -675,7 +675,6 @@ static struct handler_spec nully_opmap[] = {
 int
 main(int argc, char **argv)
 {
-	struct handler_spec *hp = nully_opmap;
 	struct nully_handler_spec *nhp = nully_path_opmap;
 	struct fvfs_param fvp;
 	struct iterables_vfs_treedata ivdat;
@@ -701,8 +700,8 @@ main(int argc, char **argv)
 		err(1, "can't enter null root");
 
 	/* assemble the optables */
-	add_opmap(nhp, nully_path_optable);
-	add_opmap(hp, fvp.optable);
+	add_opmap(nully_opmap, fvp.optable);
+	add_opmap_generic(nhp, nully_path_optable);
 	for (nhp = nully_path_opmap; nhp->opcode; nhp++)
 		fvp.optable[nhp->opcode] = nully_path_dispatch;
 
