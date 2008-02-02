@@ -107,8 +107,17 @@ struct iterables_vfs_treedata {
 	void *(*key)(struct fnode *fn);
 };
 
+struct hash_vfs_treedata {
+	int      (*compare)(struct fnode *fn, void *p);
+	void *   (*key)(struct fnode *fn);
+	unsigned (*hash)(void *p);
+	struct fnode **hash_table;
+	unsigned hash_table_size;
+};
+
 extern struct fnode_ops list_fnode_ops;
 extern struct fnode_ops rb_fnode_ops;
+extern struct fnode_ops hash_fnode_ops;
 
 folly_handler_t folly_default_handler;
 folly_handler_t folly_init;

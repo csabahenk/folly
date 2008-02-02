@@ -277,3 +277,179 @@ struct fnode_ops rb_fnode_ops = {
 	.treedata_size	= sizeof(struct rb_treedata)
 };
 
+struct hash_treedata {
+	struct fvfs *fvfs;
+	struct fnode *next_fnode;
+	struct fnode *par_fnode;
+	int childcnt;
+};
+
+static unsigned
+hash_hash_key(struct fnode *fn, void *ckey)
+{
+	struct hash_treedata *htd = fn->treedata;
+	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
+
+	return (fn2fi(htd->fvfs, fn) + vfstd->hash(ckey)) %
+	         vfstd->hash_table_size;
+}
+
+static inline unsigned
+hash_hash(struct fnode *fn, struct fnode *cfn)
+{
+	struct hash_treedata *chtd = cfn->treedata;
+	struct hash_vfs_treedata *vfstd = chtd->fvfs->parm.vfs_treedata;
+
+	return hash_hash_key(fn, vfstd->key(cfn));
+}
+
+static void
+hash_init(struct fvfs *fv, struct fnode *fn)
+{
+	struct hash_treedata *htd = fn->treedata;
+
+	htd->fvfs = fv;
+	htd->next_fnode = NULL;
+	htd->par_fnode = NULL;
+	htd->childcnt = 0;
+}
+
+static inline void
+hash_insert_dirty_hash(struct fnode *fn, struct fnode *cfn, unsigned hash)
+{
+	struct hash_treedata *htd = fn->treedata;
+	struct hash_treedata *chtd = cfn->treedata;
+	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
+
+	assert(!chtd->par_fnode && !chtd->next_fnode);
+	htd->next_fnode = vfstd->hash_table[hash];
+	vfstd->hash_table[hash] = fn;
+	chtd->par_fnode = fn;
+	htd->childcnt++;
+}
+
+static inline struct fnode *
+hash_lookup_hash(struct fnode *fn, void *ckey, unsigned hash)
+{
+	struct hash_treedata *htd = fn->treedata;
+	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
+	struct fnode *xfn;
+
+	for (xfn = vfstd->hash_table[hash]; xfn;
+	     xfn = ((struct hash_treedata *)xfn->treedata)->next_fnode) {
+		if (vfstd->compare(xfn, ckey) == 0)
+			return xfn;
+	}
+
+	return NULL;
+}
+
+static void
+hash_insert_dirty(struct fnode *fn, struct fnode *cfn)
+{
+	hash_insert_dirty_hash(fn, cfn, hash_hash(fn, cfn));
+}
+
+static struct fnode *
+hash_insert(struct fnode *fn, struct fnode *cfn)
+{
+	struct hash_treedata *htd = fn->treedata;
+	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
+	struct fnode *xfn;
+	unsigned hash = hash_hash(fn, cfn);
+
+	xfn = hash_lookup_hash(fn, vfstd->key(cfn), hash);
+	if (!xfn)
+		hash_insert_dirty_hash(fn, cfn, hash);
+
+	return xfn;
+}
+
+static struct fnode *
+hash_lookup(struct fnode *fn, void *ckey)
+{
+	return hash_lookup_hash(fn, ckey, hash_hash_key(fn, ckey));
+}
+
+static void
+hash_remove(struct fnode *fn, struct fnode *cfn)
+{
+	struct hash_treedata *htd = fn->treedata;
+	struct hash_treedata *chtd = cfn->treedata;
+	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
+	struct fnode **xfnp = &vfstd->hash_table[hash_hash(fn, cfn)];
+
+	assert(chtd->par_fnode);
+	for (;;) {
+		if (*xfnp == cfn) {
+			*xfnp = chtd->next_fnode;
+			chtd->next_fnode = NULL;
+			assert(chtd->par_fnode == fn);
+			chtd->par_fnode = NULL;
+			assert(htd->childcnt > 0);
+			htd->childcnt--;
+
+			return;
+		}
+
+		xfnp = &((struct hash_treedata *)(*xfnp)->treedata)->next_fnode;
+		assert(*xfnp);
+	}
+}
+
+static int
+hash_has_children(struct fnode *fn)
+{
+	struct hash_treedata *htd = fn->treedata;
+
+	return htd->childcnt ? 1 : 0;
+}
+
+static int
+hash_connected(struct fnode *fn)
+{
+	struct hash_treedata *htd = fn->treedata;
+
+	return htd->par_fnode ? 1 : 0;
+}
+
+static int
+hash_gc(struct fvfs *fv, struct fnode *fn)
+{
+	struct hash_treedata *htd = fn->treedata;
+
+	if (fops(fv)->connected(fn)) {
+		struct fnode *pfn = htd->par_fnode;
+
+		fops(fv)->remove(pfn, fn);
+		if (pfn->nlookup == 0)
+			/*
+			 * no deep recursion here, b/c when pfn's nlookup
+			 * has dropped to zero, it was already gc'd thus
+			 * removed
+			 */
+			hash_gc(fv, pfn);
+	}
+
+	if (htd->childcnt > 0)
+		return 1;
+
+	free_fnode(fn);
+	if (fn == fv->root_fnode)
+		fv->root_fnode = NULL;
+
+	return 0;
+}
+
+struct fnode_ops hash_fnode_ops = {
+	.insert		= hash_insert,
+	.insert_dirty	= hash_insert_dirty,
+	.remove		= hash_remove,
+	.lookup		= hash_lookup,
+	.init		= hash_init,
+	.gc		= hash_gc,
+	.next_child	= NULL,
+	.has_children	= hash_has_children,
+	.connected	= hash_connected,
+	.treedata_size	= sizeof(struct hash_treedata)
+};
