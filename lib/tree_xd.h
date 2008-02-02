@@ -608,7 +608,7 @@ name##_RB_INSERT(struct name *head, struct type *elm)			\
 	tmp = RB_ROOT(head);						\
 	while (tmp) {							\
 		parent = tmp;						\
-		comp = (cmp)(elm, key(parent));				\
+		comp = (cmp)(key(elm), parent);				\
 		if (comp < 0)						\
 			tmp = RB_LEFT(tmp, field);			\
 		else if (comp > 0)					\
@@ -631,12 +631,12 @@ name##_RB_INSERT(struct name *head, struct type *elm)			\
 									\
 /* Finds the node with the same key as elm */				\
 attr struct type *							\
-name##_RB_FIND(struct name *head, void *elm)				\
+name##_RB_FIND(struct name *head, void *kval)				\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
 	int comp;							\
 	while (tmp) {							\
-		comp = cmp(elm, key(tmp));				\
+		comp = cmp(kval, tmp);					\
 		if (comp < 0)						\
 			tmp = RB_LEFT(tmp, field);			\
 		else if (comp > 0)					\
@@ -649,13 +649,13 @@ name##_RB_FIND(struct name *head, void *elm)				\
 									\
 /* Finds the first node greater than or equal to the search key */	\
 attr struct type *							\
-name##_RB_NFIND(struct name *head, void *elm)				\
+name##_RB_NFIND(struct name *head, void *kval)				\
 {									\
 	struct type *tmp = RB_ROOT(head);				\
 	struct type *tmp_ub = NULL;					\
 	int comp;							\
 	while (tmp) {							\
-		comp = cmp(elm, key(tmp));				\
+		comp = cmp(kval, tmp);					\
 		if (comp < 0) {						\
 			tmp_ub = tmp;					\
 			tmp = RB_LEFT(tmp, field);			\
