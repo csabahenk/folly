@@ -322,8 +322,8 @@ hash_insert_dirty_hash(struct fnode *fn, struct fnode *cfn, unsigned hash)
 	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
 
 	assert(!chtd->par_fnode && !chtd->next_fnode);
-	htd->next_fnode = vfstd->hash_table[hash];
-	vfstd->hash_table[hash] = fn;
+	chtd->next_fnode = vfstd->hash_table[hash];
+	vfstd->hash_table[hash] = cfn;
 	chtd->par_fnode = fn;
 	htd->childcnt++;
 }
@@ -333,12 +333,16 @@ hash_lookup_hash(struct fnode *fn, void *ckey, unsigned hash)
 {
 	struct hash_treedata *htd = fn->treedata;
 	struct hash_vfs_treedata *vfstd = htd->fvfs->parm.vfs_treedata;
-	struct fnode *xfn;
+	struct fnode *xfn = vfstd->hash_table[hash];
+	struct hash_treedata *xhtd;
 
-	for (xfn = vfstd->hash_table[hash]; xfn;
-	     xfn = ((struct hash_treedata *)xfn->treedata)->next_fnode) {
-		if (vfstd->compare(xfn, ckey) == 0)
+	for (; xfn;) {
+		xhtd = xfn->treedata;
+
+		if (fn == xhtd->par_fnode && vfstd->compare(xfn, ckey) == 0)
 			return xfn;
+
+		xfn = xhtd->next_fnode;
 	}
 
 	return NULL;

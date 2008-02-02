@@ -636,6 +636,19 @@ nully_node_key(struct fnode *fn)
 	return pri(fn)->name;
 }
 
+static unsigned
+nully_node_hash(void *p)
+{
+	char *name = p;
+	unsigned hash = *name;
+
+	if (hash)
+		for (name++; *name; name++)
+			hash = (hash << 5) - hash + *name;
+
+	return hash;
+}
+
 struct nully_handler_spec {
 	enum fuse_opcode opcode;
 	nully_handler_t *handler;
@@ -677,9 +690,10 @@ main(int argc, char **argv)
 {
 	struct nully_handler_spec *nhp = nully_path_opmap;
 	struct fvfs_param fvp;
-	struct iterables_vfs_treedata ivdat;
+	struct hash_vfs_treedata vdat;
 	int i = 1;
 	char *null_root = "/";
+	char *fnodeops_name;
 
 	init_fvfs_param(&fvp);
 
@@ -706,9 +720,27 @@ main(int argc, char **argv)
 		fvp.optable[nhp->opcode] = nully_path_dispatch;
 
 	/* set other params */
-	ivdat.compare = nully_node_cmp;
-	ivdat.key = nully_node_key;
-	fvp.vfs_treedata = &ivdat;
+	vdat.compare = nully_node_cmp;
+	vdat.key = nully_node_key;
+	fnodeops_name = getenv("FOLLY_FNODEOPS");
+	if (fnodeops_name) {
+		if (strcmp(fnodeops_name, "list") == 0)
+			fvp.fops = &list_fnode_ops;
+		else if (strcmp(fnodeops_name, "rb") == 0)
+			fvp.fops = &rb_fnode_ops;
+		else if (strcmp(fnodeops_name, "hash") == 0) {
+			fvp.fops = &hash_fnode_ops;
+			vdat.hash_table_size = 14507;
+			vdat.hash_table =
+			  calloc(1, vdat.hash_table_size * sizeof(struct fnode));
+			if (!vdat.hash_table)
+				err(1, "can't allocate hash table");
+			vdat.hash = nully_node_hash;
+		} else
+			errx(1, "unknown fnodeops \"%s\"", fnodeops_name);
+	}
+
+	fvp.vfs_treedata = &vdat;
 	fvp.fuse_fd = acquire_fuse_fd();
 
 	/* go! */
