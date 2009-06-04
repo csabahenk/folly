@@ -18,7 +18,7 @@ After compilation, on Linux it can be run as
 under which shall be mirrored under <mountpoint> when the mount has taken
 place.
 
-ATM it neither daemonizes itself, and nor unmounts itself upon termination. On
+ATM it neither daemonizes itself, nor unmounts itself upon termination. On
 FOLLY_FNODEOPS, see below.
 
 Design
@@ -26,34 +26,55 @@ Design
 
 Folly is a minimalist lib, as is it knows just very basic information about the
 FUSE protocol. It tries to be independent of its revisions, only structures like
-fuse_(in|out)_header are used. It doesn't even include the header defining the
-protocol (ie. fuse_kernel.h), you are free to use any version of it.
+fuse_(in|out)_header are used. It doesn't even include the header file defining
+the protocol (ie. fuse_kernel.h), you are free to use any version of it.
 
 A struct named "fvfs" is threaded through its operation, the most
-important part of which are the members "inbuf" and "outbuf". Folly provides a
+interesting part of which are the members "inbuf" and "outbuf". Folly provides a
 service loop, which operates as follows:
 
   - reads request from kernel to inbuf
-  - calls the appropriate callback, based on the optable the loop is initated
+  - calls the appropriate callback, based on the optable the loop is initiated
     with
-  - callbacks unformly take only an fvfs parameter
+  - callbacks uniformly take only an fvfs parameter
   - the callback is responsible for parsing the request data in inbuf; it's done
     as follows: there are auxiliary inline functions provided by folly, like eg.
-    fuse_req_body which returns a pointer to the actual payload, which then
+    fuse_req_body, which returns a pointer to the actual payload, which then
     should be casted to the appropriate message structure pointer type
     as is defined in fuse_kernel.h
-  - callback should write answer to outbuf
+  - the callback should place the answer to outbuf
   - the loop sends outbuf to kernel
+  - loop :)
 
-Apart from the service loop, folly provides a pluggable infrastucture for
-managing inode tree ("fnode", in folly parlance). The lib itself provides three
-kind of nodeops, one called "list" in which child nodes are simply a linked
-list, one called "rb", which organizes nodes into a red-black tree, and one
-called "hash", which uses a hashing technique for looking up fnodes (which
-hashing is the as in libfuse hi-lib). Users are free to roll their own nodeops.
+Apart from the service loop, folly provides a pluggable infrastructure for
+managing the inode tree ("fnode", in folly parlance). The lib itself provides
+three kind of nodeops, one called "list", in which child nodes are simply a
+linked list, one called "rb", which organizes nodes into a red-black tree, and
+one called "hash", which uses a hashing technique for looking up fnodes (which
+hashing is the same as in libfuse hi-lib). Users are free to roll their own
+nodeops.
 
-In case of the example fs "nully", the nodeop backend can be speicified by the
+In case of the example fs "nully", the nodeop backend can be specified by the
 FOLLY_FNODEOPS environment variable.
+
+History
+-------
+
+My primary motivation was to write a FUSE based filesystem interface to
+FreeBSD's sysctl facility. I realized that I don't need all that infrastructure
+which is provided by libfuse, and taking into account that if I plan to create
+something which can be included in FreeBSD sometime in the future, I need to
+have it BSD licensed -- which libfuse (and projects relying on it) cannot be --
+I decided to write my fs from scratch. At some point I've seen the potential
+of making the code more generic, so I switched my perspective, and instead of
+just writing one fs, I turned it into a new library for FUSE. (The sysctl fs
+has not yet been written though...)
+
+Trivia
+------
+
+Folly is named after the Pere Ubu song "Folly of Youth". (Oh cruel world,
+they have took it off of Youtube :/ )
 
 Have fun,
 Csaba Henk
