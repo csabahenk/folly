@@ -142,19 +142,26 @@ nully_statfs(struct fvfs *fv, char *path)
 static void
 stat2attr(struct stat *st, struct fuse_attr *fa)
 {
+	/* XXX SUSv4 subsecond times... */
+
+	memset(fa, 0, sizeof(*fa));
+
 	fa->size       = st->st_size;
 	fa->blocks     = st->st_blocks;
 	fa->atime      = st->st_atime;
 	fa->mtime      = st->st_mtime;
 	fa->ctime      = st->st_ctime;
+/*
 	fa->atimensec  = 0;
 	fa->mtimensec  = 0;
 	fa->ctimensec  = 0;
+ */
 	fa->mode       = st->st_mode;
 	fa->nlink      = st->st_nlink;
 	fa->uid        = st->st_uid;
 	fa->gid        = st->st_gid;
 	fa->rdev       = st->st_rdev;
+	fa->blksize    = st->st_blksize;
 }
 
 static int
