@@ -410,11 +410,11 @@ nully_symlink(struct fvfs *fv, char *path)
 	struct stat st;
 	int rv;
 
-	rv = pathappend(path, name);
+	rv = pathappend(path, target);
 	if (rv)
 		return send_fuse_err(fv, rv);
 
-	rv = symlink(target, path);
+	rv = symlink(name, path);
 	if (rv == -1)
 		return send_fuse_err(fv, errno);
 	lstat(path, &st);
