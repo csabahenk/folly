@@ -180,6 +180,7 @@ init_fvfs_param(struct fvfs_param *fvp)
 {
 	objzero(fvp);
 
+	fvp->fuse_fd = -1;
 	if (!fvp->inbufsize)
 		fvp->inbufsize = DEFAULT_INBUFSIZE;
 	if (!fvp->outbufsize)
@@ -199,12 +200,20 @@ make_default_optable(folly_handler_t **optable)
 	optable[FUSE_FORGET] = folly_forget;
 }
 
+static int
+event_do_onlyfuse(struct fvfs *fv)
+{
+	return 1;
+}
+
 int
 folly_loop(struct fvfs_param *fvp)
 {
 	int i, errn = -1;
 	struct fvfs fv;
 	struct handler_spec *hp;
+	folly_handler_t *event_handler;
+	int do_fuse;
 
 	errno = 0;
 
@@ -232,6 +241,9 @@ folly_loop(struct fvfs_param *fvp)
 		goto out;
 	}
 	fv.root_fnode->priv = fvp->root_fnode_priv;
+	event_handler = fvp->event_handler;
+	if (!event_handler)
+		event_handler = event_do_onlyfuse;
 
 	if (get_fuse_req(&fv)) {
 		warnx("fuse handshake failed");
@@ -243,18 +255,26 @@ folly_loop(struct fvfs_param *fvp)
 		goto out;
 	}
 	errn = (folly_init0(&fv) || write_fuse_answer(&fv));
+	if (!errn && fvp->prelude)
+		errn = fvp->prelude(&fv);
 	if (errn)
 		goto out;
 
 	for (;;) {
-		errn = get_fuse_req(&fv);
-		if (errn) {
-			if (errn == EEOF)
-				errn = 0;
-			goto out;
-		}
-		errn = (fv.parm.optable[finh(&fv)->opcode](&fv) ||
-		        write_fuse_answer(&fv));
+		do_fuse = event_handler(&fv);
+
+		if (do_fuse == 1) {
+			errn = get_fuse_req(&fv);
+			if (errn) {
+				if (errn == EEOF)
+					errn = 0;
+				goto out;
+			}
+			errn = (fv.parm.optable[finh(&fv)->opcode](&fv) ||
+			        write_fuse_answer(&fv));
+		} else if (do_fuse < 0)
+			errn = -do_fuse;
+
 		if (errn)
 			goto out;
 	}

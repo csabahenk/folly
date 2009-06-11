@@ -37,7 +37,7 @@ struct fnode_ops {
 	struct fnode     *(*insert)(struct fnode *fn, struct fnode *cfn);
 	void        (*insert_dirty)(struct fnode *fn, struct fnode *cfn);
 	void              (*remove)(struct fnode *fn, struct fnode *cfn);
-	struct fnode *    (*lookup)(struct fnode *fn, void *p);
+	struct fnode     *(*lookup)(struct fnode *fn, void *p);
 	void                (*init)(struct fvfs *fv,  struct fnode *fn);
 	int                   (*gc)(struct fvfs *fv,  struct fnode *fn);
 	struct fnode *(*next_child)(struct fnode *fn, struct fnode *cfn);
@@ -52,6 +52,8 @@ struct fvfs_param {
 	size_t outbufsize;
 	struct fuse_init_out finit_out;
 	struct fnode_ops *fops;
+	folly_handler_t *prelude;
+	folly_handler_t *event_handler;
 	int fuse_fd;
 	void *root_fnode_priv;
 	void *vfs_treedata;
