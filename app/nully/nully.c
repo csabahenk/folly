@@ -17,26 +17,75 @@
 #include <dirent.h>
 #include <err.h>
 #include <assert.h>
+#include <poll.h>
+#include <sys/inotify.h>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 #include "folly.h"
 
+#ifndef MAX
+#define MAX(a, b) (((a) < (b)) ? (b) : (a))
+#endif
+
 typedef int (nully_handler_t)(struct fvfs *fv, char *path);
 
+static int i_max_watch;
+static struct fnode **inotify_table;
+static char inval_buf[sizeof(struct fuse_out_header) +
+                      MAX(sizeof(struct fuse_notify_inval_inode_out),
+                          sizeof(struct fuse_notify_inval_entry_out) + NAME_MAX + 1)];
+static int transfer_pipe[2];
+struct pollfd pollfd[2];
+int inotify_fd;
+static char inotbuf[1024];
 static char pbuf[PATH_MAX + NAME_MAX + 2];
 static nully_handler_t *nully_path_optable[FUSE_OPTABLE_SIZE];
 
 struct nully_priv {
 	char *name;
 	struct fnode *par_fn;
+	int inotify_wd;
+	/* To discard inotify events completely precisely,
+	 * we'd need to maintain a counter for each event...
+	 * anyway, not a big problem if some discardable
+	 * events go through, we just send a few sprurious
+	 *invalidations.
+	 */
+	int inotify_discard;
 };
 
 static inline struct nully_priv *
 pri(struct fnode *fn)
 {
 	return (struct nully_priv *)fn->priv;
+}
+
+static void
+i_add_watch(struct fvfs *fv, char *path, struct fnode *fn)
+{
+	int wd;
+
+	wd = inotify_add_watch(inotify_fd, path,
+	                       IN_ATTRIB|IN_DELETE|IN_MODIFY|IN_MOVED_FROM|
+	                       IN_MOVED_TO|IN_DONT_FOLLOW);
+	assert(wd != -1);
+	assert(wd < i_max_watch);
+
+	inotify_table[wd] = fn;
+	pri(fn)->inotify_wd = wd;
+}
+
+static void
+nully_remove(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
+{
+	if (pri(cfn)->inotify_wd) {
+		assert( !inotify_rm_watch(inotify_fd, pri(cfn)->inotify_wd) );
+		inotify_table[pri(cfn)->inotify_wd] == NULL;
+		pri(cfn)->inotify_wd = 0;
+	}
+	fops(fv)->remove(fn, cfn);
 }
 
 static char *
@@ -94,12 +143,15 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 {
 	struct fnode *cfn;
 
+	assert( strlen(name) <= NAME_MAX );
 	cfn = make_fnode(fv, sizeof(struct nully_priv) + strlen(name) + 1);
 	if (!cfn)
 		return NULL;
 	memcpy(pri(cfn) + 1, name, strlen(name) + 1);
 	pri(cfn)->name = (char *)(pri(cfn) + 1);
 	pri(cfn)->par_fn = fn;
+	pri(cfn)->inotify_wd = 0;
+	pri(cfn)->inotify_discard = 0;
 
 	return cfn;
 }
@@ -177,7 +229,7 @@ nully_getattr(struct fvfs *fv, char *path)
 	struct stat st;
 
 	if (lstat(path, &st) != -1) {
-		fao->attr_valid      = 0;
+		fao->attr_valid      = (uint64_t)-1;
 		fao->attr_valid_nsec = 0;
 		stat2attr(&st, fao);
 	}
@@ -204,7 +256,7 @@ nully_lookup(struct fvfs *fv, char *path)
 
 	if (rv == -1) {
 		if (errno == ENOENT && cfn) {
-			fops(fv)->remove(fn, cfn);
+			nully_remove(fv, fn, cfn);
 
 			DIAG(fv, " #%llu/%s => (#%llu) X\n", fn2fi(fv, fn),
 			     name, fn2fi(fv, cfn));
@@ -220,6 +272,8 @@ nully_lookup(struct fvfs *fv, char *path)
 			cfn = make_fnode_nully(fv, fn, name);
 			if (!cfn)
 				return send_fuse_err(fv, errno);
+			if (S_ISDIR(st.st_mode))
+				i_add_watch(fv, path, cfn);
 			fops(fv)->insert_dirty(fn, cfn);
 
 			DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
@@ -227,6 +281,8 @@ nully_lookup(struct fvfs *fv, char *path)
 		}
 		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
+		feo->entry_valid = (uint64_t)-1;
+		feo->attr_valid = (uint64_t)-1;
 		stat2attr(&st, feo);
 	}
 
@@ -242,7 +298,7 @@ nully_opendir(struct fvfs *fv, char *path)
 	d = opendir(path);
 
 	foo->fh = (uintptr_t)d;
-	foo->open_flags = 0;
+	foo->open_flags = FOPEN_KEEP_CACHE;
 
 	return send_fuse_obj(fv, foo, errno);
 }
@@ -319,6 +375,8 @@ link_entry(struct fvfs *fv, struct fnode *fn, struct stat *st, char *name,
 
 	memset(feo, sizeof(*feo) - sizeof(feo->attr), 0);
 	feo->nodeid = fn2fi(fv, cfn);
+	feo->entry_valid = (uint64_t)-1;
+	feo->attr_valid = (uint64_t)-1;
 	stat2attr(st, feo);
 
 	return send_fuse_data(fv, sizeof(*feo) + size, errno);
@@ -457,7 +515,7 @@ nully_unlink_generic(struct fvfs *fv, char *path,
 
 	cfn = fops(fv)->lookup(fn, name);
 	if (cfn) {
-		fops(fv)->remove(fn, cfn);
+		nully_remove(fv, fn, cfn);
 
 		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), name,
 		     fn2fi(fv, cfn));
@@ -485,7 +543,7 @@ nully_rename(struct fvfs *fv, char *path)
 	char *fname = (char *)(fri + 1);
 	char *tname = fname + strlen(fname) + 1; 
 	struct fnode *fn = argnode(fv);
-	struct fnode *cfn, *tfn;
+	struct fnode *cfn, *cfn2, *tfn;
 	char *targetpath, targetpbuf[PATH_MAX + NAME_MAX + 2]; 
 	int rv;
 
@@ -509,17 +567,32 @@ nully_rename(struct fvfs *fv, char *path)
 		cfn = make_fnode_nully(fv, tfn, tname);
 		if (!cfn)
 			return send_fuse_err(fv, errno);
+		/* It would be nice to discard the inotify event
+		 * implied by our rename operation, and do the
+		 * respective namespace operations in our scope.
+		 * However, the thing is that our practice so
+		 * far (take care about just tree shape but ignore
+		 * node identity) wouldn't suffice b/c now entry
+		 * cache is in operation. So for now, do the dummy
+		 * thing and let through the event and invalidate
+		 * the cache in turn.
+		pri(cfn)->inotify_discard |= IN_MOVED_TO;
+		 */
 		fops(fv)->insert_dirty(tfn, cfn);
 
 		DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, tfn), tname,
 		     fn2fi(fv, cfn));
 	}
-	cfn = fops(fv)->lookup(fn, fname);
-	if (cfn) {
-		fops(fv)->remove(fn, cfn);
+	cfn2 = fops(fv)->lookup(fn, fname);
+	if (cfn2) {
+		if (pri(cfn2)->inotify_wd) {
+			pri(cfn)->inotify_wd = pri(cfn2)->inotify_wd;
+			inotify_table[pri(cfn)->inotify_wd] = cfn;
+		}
+		nully_remove(fv, fn, cfn2);
 
 		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), fname,
-		     fn2fi(fv, cfn));
+		     fn2fi(fv, cfn2));
 	}
 
 	return send_fuse_data(fv, 0, errno);
@@ -557,6 +630,7 @@ nully_write(struct fvfs *fv)
 	errno = 0;
 
 	fwo->size = pwrite(fwi->fh, fwi + 1, fwi->size, fwi->offset);
+	pri(argnode(fv))->inotify_discard |= IN_MODIFY;
 
 	return send_fuse_obj(fv, fwo, errno);
 }
@@ -614,6 +688,7 @@ nully_setattr(struct fvfs *fv, char *path)
 {
 	struct fuse_setattr_in *fsi = fuse_req_body(fv);
 	int rv = 0;
+	int diev = 0;
 
 	/*
 	 * For the sake of simplicity we don't make use of
@@ -621,14 +696,23 @@ nully_setattr(struct fvfs *fv, char *path)
 	 * is flagged via FATTR_FH).
 	 */
 
-	if (fsi->valid & FATTR_MODE)
+	if (fsi->valid & FATTR_MODE) {
 		rv = chmod(path, fsi->mode);
-	if (rv != -1 && fsi->valid & (FATTR_UID|FATTR_GID))
+		if (rv != -1)
+			diev |= IN_ATTRIB;
+	}
+	if (rv != -1 && fsi->valid & (FATTR_UID|FATTR_GID)) {
 		rv = chown(path,
 		           fsi->valid & FATTR_UID ? fsi->uid : -1,
 		           fsi->valid & FATTR_GID ? fsi->gid : -1);
-	if (rv != -1 && FATTR_SIZE)
+		if (rv != -1)
+			diev |= IN_ATTRIB;
+	}
+	if (rv != -1 && FATTR_SIZE) {
 		rv = truncate(path, fsi->size);
+		if (rv != -1)
+			diev |= IN_MODIFY;
+	}
 	if (rv != -1 &&
 	    (fsi->valid & (FATTR_ATIME|FATTR_MTIME)) == (FATTR_ATIME|FATTR_MTIME)) {
 		struct timeval tv[2];
@@ -638,7 +722,11 @@ nully_setattr(struct fvfs *fv, char *path)
 		tv[1].tv_sec  = fsi->mtime;
 		tv[1].tv_usec = fsi->mtimensec;
 		rv = utimes(path, tv);
+		if (rv != -1)
+			diev |= IN_ATTRIB;
 	}
+
+	pri(argnode(fv))->inotify_discard |= diev;
 
 	return (rv == -1) ?
 	       send_fuse_err(fv, errno) :
@@ -682,6 +770,186 @@ nully_node_hash(void *p)
 			hash = (hash << 5) - hash + *name;
 
 	return hash;
+}
+
+static void
+send_inval_async(size_t len)
+{
+	int rv;
+
+	rv = write(transfer_pipe[1], inval_buf, len);
+	if (rv != len && errno == 0)
+		errno = EIO;
+}
+
+static void
+revinval_node(f_ino_t nid, int off)
+{
+	struct fuse_out_header *fouh = (struct fuse_out_header *)inval_buf;
+	struct fuse_notify_inval_inode_out *fniio =
+	  (struct fuse_notify_inval_inode_out *)(fouh + 1);
+
+	fouh->error = FUSE_NOTIFY_INVAL_INODE;
+	fouh->len = sizeof(*fouh) + sizeof(*fniio);
+	fniio->ino = nid;
+	fniio->off = off;
+	fniio->len = -1;
+
+	send_inval_async(fouh->len);
+}
+
+static void
+revinval_entry(f_ino_t nid, char *name)
+{
+	struct fuse_out_header *fouh = (struct fuse_out_header *)inval_buf;
+	struct fuse_notify_inval_entry_out *fnieo =
+	  (struct fuse_notify_inval_entry_out *)(fouh + 1);
+	int nlen;
+
+	nlen = strlen(name);
+
+	fouh->error = FUSE_NOTIFY_INVAL_ENTRY;
+	fouh->len = sizeof(*fouh) + sizeof(*fnieo) + nlen + 1;
+	fnieo->parent = nid;
+	fnieo->namelen = nlen;
+	strcpy(inval_buf + sizeof(*fouh) + sizeof(*fnieo), name);
+
+	send_inval_async(fouh->len);
+}
+
+static int
+nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
+{
+	f_ino_t nid;
+	struct fnode *fn, *cfn;
+	char *path;
+	int md;
+
+	fn = inotify_table[iev->wd];
+	assert(fn);
+	nid = fn2fi(fv, fn);
+	path = get_path(fv, nid, pbuf);
+
+	DIAG(fv, "INOTIFY: wd %d, mask %#x, name %s, len %d\n"
+	         " #%llu => %s\n",
+	         iev->wd, iev->mask, iev->name, iev->len,
+	         nid, path ? path : "??");
+
+	cfn = fops(fv)->lookup(fn, iev->name);
+	if (cfn) {
+		DIAG(fv, " #%llu/%s => #%llu\n", nid, iev->name,
+		     fn2fi(fv, cfn));
+		md = iev->mask & ~pri(cfn)->inotify_discard;
+		pri(cfn)->inotify_discard &= ~iev->mask;
+		if (md != iev->mask)
+			DIAG(fv, " discarded events %#x, kept %#x\n",
+			     iev->mask & ~md, md);
+	} else {
+		DIAG(fv, " discarded b/c no node\n");
+
+		return 0;
+	}
+
+	errno = 0;
+	if (md & IN_ATTRIB) {
+		DIAG(fv, " ATTRIB\n");
+		revinval_node(fn2fi(fv, cfn), -1);
+		if (errno)
+			return errno;
+	}
+	if (md & IN_DELETE) {
+		DIAG(fv, " DELETE\n");
+		revinval_entry(nid, iev->name);
+		if (errno)
+			return errno;
+		nully_remove(fv, fn, cfn);
+	}
+	if (md & IN_MODIFY) {
+		DIAG(fv, " MODIFY\n");
+		revinval_node(fn2fi(fv, cfn), 0);
+		if (errno)
+			return errno;
+	}
+	if (md & IN_MOVED_FROM) {
+		DIAG(fv, " MOVED_FROM\n");
+		revinval_entry(nid, iev->name);
+		if (errno)
+			return errno;
+		nully_remove(fv, fn, cfn);
+	}
+	if (md & IN_MOVED_TO) {
+		DIAG(fv, " MOVED_TO\n");
+		revinval_entry(nid, iev->name);
+		if (errno)
+			return errno;
+	}
+
+	return 0;
+}
+
+static int
+nully_prelude(struct fvfs *fv)
+{
+	i_add_watch(fv, ".", fv->root_fnode);
+
+	return 0;
+}
+
+static int
+nully_event_handler(struct fvfs *fv)
+{
+	int bytes, rv;
+	char *ibx;
+	struct inotify_event *iev;
+
+	rv = poll(pollfd, 2, -1);
+	if (rv == -1)
+		return -errno;
+	if (pollfd[0].revents & POLLERR)
+		return -EBADF;
+
+	/* got inotify event */
+	if (pollfd[1].revents & POLLIN) {
+		bytes = read(inotify_fd, inotbuf, sizeof(inotbuf));
+		if (bytes == -1)
+			return -errno;
+
+		for (ibx = inotbuf; ; ibx += sizeof(*iev) + iev->len) {
+			iev = (struct inotify_event *)ibx;
+			if (ibx + sizeof(*iev) > inotbuf + bytes ||
+			    ibx + sizeof(*iev) + iev->len > inotbuf + bytes)
+				break;
+			rv = nully_inotify_handler(fv, iev);
+			if (rv)
+				return -rv;
+		}
+	}
+
+	/* got FUSE request */
+	if (pollfd[0].revents & POLLIN)
+		return 1;
+
+	return 0;
+}
+
+static void transfer_loop(int infd, int outfd)
+{
+	struct fuse_out_header *fouh;
+	int rv;
+
+	for (;;) {
+		rv = read(infd, inval_buf, sizeof(*fouh));
+		if (rv != sizeof(*fouh))
+			break;
+		fouh = (struct fuse_out_header *)inval_buf;
+		rv = read(infd, inval_buf + sizeof(*fouh),
+		          fouh->len - sizeof(*fouh));
+		if (rv != fouh->len - sizeof(*fouh))
+			break;
+		rv = write(outfd, inval_buf, fouh->len);
+		if (rv != fouh->len)
+			break;
+	}
 }
 
 struct nully_handler_spec {
@@ -729,6 +997,14 @@ main(int argc, char **argv)
 	int i = 1;
 	char *null_root = "/";
 	char *fnodeops_name;
+	int fd;
+	char procbuf[32];
+	struct nully_priv root_priv;
+	int fuse_fd;
+	/**/
+	pid_t pid;
+	char *ibx;
+	struct inotify_event *iev;
 
 	init_fvfs_param(&fvp);
 
@@ -746,7 +1022,24 @@ main(int argc, char **argv)
 	if (argc > i)
 		errx(1, "usage: nully [-d] [path]");
 	if (chdir(null_root) == -1)
-		err(1, "can't enter null root");
+		err(1, "cannot enter null root");
+
+	fuse_fd = acquire_fuse_fd();
+	if (fuse_fd == -1)
+		err(1, "cannot connect fuse device");
+
+	if (pipe(transfer_pipe) == -1)
+		err(1, "cannot create pipe pair");
+	pid = fork();
+	if (pid == -1)
+		err(1, "cannot fork");
+	if (pid)
+		close(transfer_pipe[0]);
+	else {
+		close(transfer_pipe[1]);
+		transfer_loop(transfer_pipe[0], fuse_fd);
+		exit(0);
+	}
 
 	/* assemble the optables */
 	add_opmap(nully_opmap, fvp.optable);
@@ -755,6 +1048,13 @@ main(int argc, char **argv)
 		fvp.optable[nhp->opcode] = nully_path_dispatch;
 
 	/* set other params */
+	inotify_fd = inotify_init();
+	if (inotify_fd == -1)
+		err(1, "cannot init inotify");
+	pollfd[0].fd = fuse_fd;
+	pollfd[1].fd = inotify_fd;
+	pollfd[0].events = pollfd[1].events = POLLIN;
+
 	vdat.compare = nully_node_cmp;
 	vdat.key = nully_node_key;
 	fnodeops_name = getenv("FOLLY_FNODEOPS");
@@ -767,7 +1067,7 @@ main(int argc, char **argv)
 			fvp.fops = &hash_fnode_ops;
 			vdat.hash_table_size = 14507;
 			vdat.hash_table =
-			  calloc(1, vdat.hash_table_size * sizeof(struct fnode));
+			  calloc(vdat.hash_table_size, sizeof(struct fnode));
 			if (!vdat.hash_table)
 				err(1, "can't allocate hash table");
 			vdat.hash = nully_node_hash;
@@ -776,7 +1076,19 @@ main(int argc, char **argv)
 	}
 
 	fvp.vfs_treedata = &vdat;
-	fvp.fuse_fd = acquire_fuse_fd();
+	fvp.fuse_fd = fuse_fd;
+	fvp.prelude = nully_prelude;
+	fvp.event_handler = &nully_event_handler;
+	fvp.root_fnode_priv = &root_priv;
+	memset(inval_buf, 0, sizeof(inval_buf));
+
+	fd = open("/proc/sys/fs/inotify/max_user_watches", O_RDONLY);
+	if (fd == -1 || read(fd, procbuf, 32) == -1)
+		err(1, "cannot read inotify max_user_watches");
+	i_max_watch = strtoul(procbuf, NULL, 10);
+	inotify_table = calloc(i_max_watch, sizeof(struct fnode *));
+	if (inotify_table == NULL)
+		err(1, "cannot allocate inotify table");
 
 	/* go! */
 	folly_loop(&fvp);
