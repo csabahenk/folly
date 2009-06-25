@@ -140,7 +140,7 @@ nully_statfs(struct fvfs *fv, char *path)
 }
 
 static void
-stat2attr(struct stat *st, struct fuse_attr *fa)
+stat2attr_i(struct stat *st, struct fuse_attr *fa)
 {
 	/* XXX SUSv4 subsecond times... */
 
@@ -164,6 +164,12 @@ stat2attr(struct stat *st, struct fuse_attr *fa)
 	fa->blksize    = st->st_blksize;
 }
 
+#define stat2attr(st, fx) 		\
+do {					\
+	stat2attr_i(st, &(fx)->attr);	\
+	(fx)->attr.ino = (st)->st_ino;	\
+} while (0)
+
 static int
 nully_getattr(struct fvfs *fv, char *path)
 {
@@ -173,8 +179,7 @@ nully_getattr(struct fvfs *fv, char *path)
 	if (lstat(path, &st) != -1) {
 		fao->attr_valid      = 0;
 		fao->attr_valid_nsec = 0;
-		stat2attr(&st, &fao->attr);
-		fao->attr.ino = finh(fv)->nodeid;
+		stat2attr(&st, fao);
 	}
 
 	return send_fuse_obj(fv, fao, errno);
@@ -211,8 +216,7 @@ nully_lookup(struct fvfs *fv, char *path)
 		}
 		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
-		stat2attr(&st, &feo->attr);
-		feo->attr.ino = feo->nodeid;
+		stat2attr(&st, feo);
 	}
 
 	return send_fuse_obj(fv, feo, errno);
@@ -301,8 +305,7 @@ link_entry(struct fvfs *fv, struct fnode *fn, struct stat *st, char *name,
 
 	memset(feo, sizeof(*feo) - sizeof(feo->attr), 0);
 	feo->nodeid = fn2fi(fv, cfn);
-	stat2attr(st, &feo->attr);
-	feo->attr.ino = feo->nodeid;
+	stat2attr(st, feo);
 
 	return send_fuse_data(fv, sizeof(*feo) + size, errno);
 }
