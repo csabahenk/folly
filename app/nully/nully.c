@@ -203,16 +203,27 @@ nully_lookup(struct fvfs *fv, char *path)
 	cfn = fops(fv)->lookup(fn, name);
 
 	if (rv == -1) {
-		if (errno == ENOENT && cfn)
+		if (errno == ENOENT && cfn) {
 			fops(fv)->remove(fn, cfn);
+
+			DIAG(fv, " #%llu/%s => (#%llu) X\n", fn2fi(fv, fn),
+			     name, fn2fi(fv, cfn));
+		} else
+			DIAG(fv, " #%llu/%s => ??\n", fn2fi(fv, fn), name);
 	} else {
-		if (cfn)
+		if (cfn) {
 			cfn->nlookup++;
-		else {
+
+			DIAG(fv, " #%llu/%s => #%llu\n", fn2fi(fv, fn), name,
+			     fn2fi(fv, cfn));
+		} else {
 			cfn = make_fnode_nully(fv, fn, name);
 			if (!cfn)
 				return send_fuse_err(fv, errno);
 			fops(fv)->insert_dirty(fn, cfn);
+
+			DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
+			     fn2fi(fv, cfn));
 		}
 		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
@@ -302,6 +313,9 @@ link_entry(struct fvfs *fv, struct fnode *fn, struct stat *st, char *name,
 	if (!cfn)
 		return send_fuse_err(fv, errno);
 	cfn = insert_lookup_fnode(fv, fn, cfn);
+
+	DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
+	     fn2fi(fv, cfn));
 
 	memset(feo, sizeof(*feo) - sizeof(feo->attr), 0);
 	feo->nodeid = fn2fi(fv, cfn);
@@ -442,8 +456,12 @@ nully_unlink_generic(struct fvfs *fv, char *path,
 		return send_fuse_err(fv, errno);
 
 	cfn = fops(fv)->lookup(fn, name);
-	if (cfn)
+	if (cfn) {
 		fops(fv)->remove(fn, cfn);
+
+		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), name,
+		     fn2fi(fv, cfn));
+	}
 
 	return send_fuse_data(fv, 0, errno);
 }
@@ -492,10 +510,17 @@ nully_rename(struct fvfs *fv, char *path)
 		if (!cfn)
 			return send_fuse_err(fv, errno);
 		fops(fv)->insert_dirty(tfn, cfn);
+
+		DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, tfn), tname,
+		     fn2fi(fv, cfn));
 	}
 	cfn = fops(fv)->lookup(fn, fname);
-	if (cfn)
+	if (cfn) {
 		fops(fv)->remove(fn, cfn);
+
+		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), fname,
+		     fn2fi(fv, cfn));
+	}
 
 	return send_fuse_data(fv, 0, errno);
 }
