@@ -432,7 +432,7 @@ hash_gc(struct fvfs *fv, struct fnode *fn)
 			 * has dropped to zero, it was already gc'd thus
 			 * removed
 			 */
-			hash_gc(fv, pfn);
+			fops(fv)->gc(fv, pfn);
 	}
 
 	if (htd->childcnt > 0)

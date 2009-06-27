@@ -42,6 +42,7 @@ int inotify_fd;
 static char inotbuf[1024];
 static char pbuf[PATH_MAX + NAME_MAX + 2];
 static nully_handler_t *nully_path_optable[FUSE_OPTABLE_SIZE];
+static struct fnode_ops *base_fnodeops;
 
 struct nully_priv {
 	char *name;
@@ -54,6 +55,7 @@ struct nully_priv {
 	 *invalidations.
 	 */
 	int inotify_discard;
+	uint8_t name_external:1;
 };
 
 static inline struct nully_priv *
@@ -152,6 +154,7 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 	pri(cfn)->par_fn = fn;
 	pri(cfn)->inotify_wd = 0;
 	pri(cfn)->inotify_discard = 0;
+	pri(cfn)->name_external = 0;
 
 	return cfn;
 }
@@ -562,37 +565,50 @@ nully_rename(struct fvfs *fv, char *path)
 		return send_fuse_err(fv, rv);
 
 	tfn = fi2fn(fv, fri->newdir);
-	cfn = fops(fv)->lookup(tfn, tname);
-	if (!cfn) {
+	cfn = fops(fv)->lookup(fn, fname);
+	if (cfn) {
+		/* The hairy operation of doing the
+		 * rename in folly's node space...
+		 * this is needed to keep being
+		 * sync with kernel's entry cache.
+		 *
+		 * Now it's done properly so eventually
+		 * we can discard the induced inotify event.
+		 */
+
+		fops(fv)->remove(fn, cfn);
+
+		if (strlen(tname) <= strlen(pri(cfn)->name))
+			strcpy(pri(cfn)->name, tname);
+		else {
+			if (pri(cfn)->name_external)
+				free(pri(cfn)->name);
+			pri(cfn)->name = strdup(tname);
+			if (!pri(cfn)->name)
+				return send_fuse_err(fv, errno);
+			pri(cfn)->name_external = 1;
+		}
+
+		DIAG(fv, " #%llu/%s -> #%llu/%s => #%llu\n", fn2fi(fv, fn),
+		     fname, fn2fi(fv, tfn), tname, fn2fi(fv, cfn));
+	} else {
 		cfn = make_fnode_nully(fv, tfn, tname);
 		if (!cfn)
 			return send_fuse_err(fv, errno);
-		/* It would be nice to discard the inotify event
-		 * implied by our rename operation, and do the
-		 * respective namespace operations in our scope.
-		 * However, the thing is that our practice so
-		 * far (take care about just tree shape but ignore
-		 * node identity) wouldn't suffice b/c now entry
-		 * cache is in operation. So for now, do the dummy
-		 * thing and let through the event and invalidate
-		 * the cache in turn.
-		pri(cfn)->inotify_discard |= IN_MOVED_TO;
-		 */
-		fops(fv)->insert_dirty(tfn, cfn);
 
-		DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, tfn), tname,
-		     fn2fi(fv, cfn));
+		DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, tfn),
+		     tname, fn2fi(fv, cfn));
 	}
-	cfn2 = fops(fv)->lookup(fn, fname);
-	if (cfn2) {
-		if (pri(cfn2)->inotify_wd) {
-			pri(cfn)->inotify_wd = pri(cfn2)->inotify_wd;
-			inotify_table[pri(cfn)->inotify_wd] = cfn;
-		}
-		nully_remove(fv, fn, cfn2);
+	pri(cfn)->inotify_discard |= IN_MOVED_TO;
 
-		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), fname,
-		     fn2fi(fv, cfn2));
+	cfn2 = fops(fv)->insert(tfn, cfn);
+	if (cfn2) {
+		nully_remove(fv, tfn, cfn2);
+
+		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, tfn),
+		     tname, fn2fi(fv, cfn2));
+
+		fops(fv)->insert_dirty(tfn, cfn);
 	}
 
 	return send_fuse_data(fv, 0, errno);
@@ -770,6 +786,22 @@ nully_node_hash(void *p)
 			hash = (hash << 5) - hash + *name;
 
 	return hash;
+}
+
+static int
+nully_gc(struct fvfs *fv, struct fnode *fn)
+{
+	char *name = NULL;
+	int rv;
+
+	if (pri(fn)->name_external)
+		name = pri(fn)->name;
+
+	rv = base_fnodeops->gc(fv, fn);
+	if (rv == 0 && name)
+		free(name);
+
+	return rv;
 }
 
 static void
@@ -1005,6 +1037,7 @@ main(int argc, char **argv)
 	pid_t pid;
 	char *ibx;
 	struct inotify_event *iev;
+	struct fnode_ops nully_fnodeops;
 
 	init_fvfs_param(&fvp);
 
@@ -1060,11 +1093,11 @@ main(int argc, char **argv)
 	fnodeops_name = getenv("FOLLY_FNODEOPS");
 	if (fnodeops_name) {
 		if (strcmp(fnodeops_name, "list") == 0)
-			fvp.fops = &list_fnode_ops;
+			base_fnodeops = &list_fnode_ops;
 		else if (strcmp(fnodeops_name, "rb") == 0)
-			fvp.fops = &rb_fnode_ops;
+			base_fnodeops = &rb_fnode_ops;
 		else if (strcmp(fnodeops_name, "hash") == 0) {
-			fvp.fops = &hash_fnode_ops;
+			base_fnodeops = &hash_fnode_ops;
 			vdat.hash_table_size = 14507;
 			vdat.hash_table =
 			  calloc(vdat.hash_table_size, sizeof(struct fnode));
@@ -1073,6 +1106,12 @@ main(int argc, char **argv)
 			vdat.hash = nully_node_hash;
 		} else
 			errx(1, "unknown fnodeops \"%s\"", fnodeops_name);
+
+		/* closet OO */
+		memcpy(&nully_fnodeops, base_fnodeops,
+		       sizeof(struct fnode_ops));
+		nully_fnodeops.gc = nully_gc;
+		fvp.fops = &nully_fnodeops;
 	}
 
 	fvp.vfs_treedata = &vdat;
