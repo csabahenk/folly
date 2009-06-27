@@ -209,7 +209,7 @@ nully_lookup(struct fvfs *fv, char *path)
 				return send_fuse_err(fv, errno);
 			fops(fv)->insert_dirty(fn, cfn);
 		}
-		memset(feo, sizeof(*feo) - sizeof(feo->attr), 0);
+		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
 		stat2attr(&st, &feo->attr);
 		feo->attr.ino = feo->nodeid;
