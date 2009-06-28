@@ -56,6 +56,7 @@ struct nully_priv {
 	 */
 	int inotify_discard;
 	uint8_t name_external:1;
+	uint8_t negative:1;
 };
 
 static inline struct nully_priv *
@@ -71,7 +72,7 @@ i_add_watch(struct fvfs *fv, char *path, struct fnode *fn)
 
 	wd = inotify_add_watch(inotify_fd, path,
 	                       IN_ATTRIB|IN_DELETE|IN_MODIFY|IN_MOVED_FROM|
-	                       IN_MOVED_TO|IN_DONT_FOLLOW);
+	                       IN_MOVED_TO|IN_CREATE|IN_DONT_FOLLOW);
 	assert(wd != -1);
 	assert(wd < i_max_watch);
 
@@ -88,6 +89,8 @@ nully_remove(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
 		pri(cfn)->inotify_wd = 0;
 	}
 	fops(fv)->remove(fn, cfn);
+	if (pri(cfn)->negative)
+		fops(fv)->gc(fv, cfn);
 }
 
 static char *
@@ -155,6 +158,7 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 	pri(cfn)->inotify_wd = 0;
 	pri(cfn)->inotify_discard = 0;
 	pri(cfn)->name_external = 0;
+	pri(cfn)->negative = 0;
 
 	return cfn;
 }
@@ -256,15 +260,33 @@ nully_lookup(struct fvfs *fv, char *path)
 
 	rv = lstat(path, &st);
 	cfn = fops(fv)->lookup(fn, name);
+	assert( !(cfn && pri(cfn)->negative) );
 
 	if (rv == -1) {
-		if (errno == ENOENT && cfn) {
-			nully_remove(fv, fn, cfn);
+		if (errno == ENOENT) {
+			if (cfn) {
+				nully_remove(fv, fn, cfn);
 
-			DIAG(fv, " #%llu/%s => (#%llu) X\n", fn2fi(fv, fn),
-			     name, fn2fi(fv, cfn));
-		} else
-			DIAG(fv, " #%llu/%s => ??\n", fn2fi(fv, fn), name);
+				DIAG(fv, " #%llu/%s => (#%llu) X\n", fn2fi(fv, fn),
+				     name, fn2fi(fv, cfn));
+			}
+
+			/* add a negative entry both on our side and
+		         * on kernel's
+			 */
+			cfn = make_fnode_nully(fv, fn, name);
+			if (!cfn)
+				return send_fuse_err(fv, errno);
+			pri(cfn)->negative = 1;
+			fops(fv)->insert_dirty(fn, cfn);
+
+			DIAG(fv, " #%llu/%s => #%llu -\n", fn2fi(fv, fn), name,
+			     fn2fi(fv, cfn));
+
+			errno = 0;
+			memset(feo, 0, sizeof(*feo));
+			feo->entry_valid = (uint64_t)-1;
+		}
 	} else {
 		if (cfn) {
 			cfn->nlookup++;
@@ -372,6 +394,8 @@ link_entry(struct fvfs *fv, struct fnode *fn, struct stat *st, char *name,
 	if (!cfn)
 		return send_fuse_err(fv, errno);
 	cfn = insert_lookup_fnode(fv, fn, cfn);
+	pri(cfn)->negative = 0;
+	pri(cfn)->inotify_discard |= IN_CREATE;
 
 	DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
 	     fn2fi(fv, cfn));
@@ -518,6 +542,7 @@ nully_unlink_generic(struct fvfs *fv, char *path,
 
 	cfn = fops(fv)->lookup(fn, name);
 	if (cfn) {
+		assert( !pri(cfn)->negative );
 		nully_remove(fv, fn, cfn);
 
 		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), name,
@@ -567,6 +592,8 @@ nully_rename(struct fvfs *fv, char *path)
 	tfn = fi2fn(fv, fri->newdir);
 	cfn = fops(fv)->lookup(fn, fname);
 	if (cfn) {
+		assert( !pri(cfn)->negative );
+
 		/* The hairy operation of doing the
 		 * rename in folly's node space...
 		 * this is needed to keep being
@@ -603,11 +630,10 @@ nully_rename(struct fvfs *fv, char *path)
 
 	cfn2 = fops(fv)->insert(tfn, cfn);
 	if (cfn2) {
-		nully_remove(fv, tfn, cfn2);
-
 		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, tfn),
 		     tname, fn2fi(fv, cfn2));
 
+		nully_remove(fv, tfn, cfn2);
 		fops(fv)->insert_dirty(tfn, cfn);
 	}
 
@@ -914,6 +940,17 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		revinval_entry(nid, iev->name);
 		if (errno)
 			return errno;
+		if (pri(cfn)->negative)
+			nully_remove(fv, fn, cfn);
+	}
+	if (md & IN_CREATE) {
+		assert( pri(cfn)->negative );
+
+		DIAG(fv, " CREATE\n");
+		revinval_entry(nid, iev->name);
+		if (errno)
+			return errno;
+		nully_remove(fv, fn, cfn);
 	}
 
 	return 0;
