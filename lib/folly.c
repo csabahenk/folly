@@ -55,7 +55,7 @@ get_fuse_req(struct fvfs *fv)
 	 * neither does...]
 	 */
 #endif
-	DIAG(fv, "%s[%d]: unique %llu, nodeid %llu, len %d\n",
+	DIAG(fv, "%s[%d] unique %llu #%llu len %d\n",
 	     fuse_opnames[finh(fv)->opcode], finh(fv)->opcode,
 	     finh(fv)->unique, finh(fv)->nodeid, finh(fv)->len);
 	return 0;
@@ -76,7 +76,7 @@ write_fuse_answer(struct fvfs *fv)
 			return -1;
 		}
 	}
-	DIAG(fv, "  len %d, error \"%s\" [%d]\n", fouh(fv)->len,
+	DIAG(fv, "  len %d error \"%s\" [%d]\n", fouh(fv)->len,
 	     strerror(-fouh(fv)->error), -fouh(fv)->error);
 	return 0;
 }
@@ -337,7 +337,7 @@ folly_forget(struct fvfs *fv)
 #endif
 	fn = fi2fn(fv, finh(fv)->nodeid);
 
-	DIAG(fv, " node %llu: nlookup %llu - %llu",
+	DIAG(fv, " #%llu nlookup %llu - %llu\n",
 	     finh(fv)->nodeid, fn->nlookup, ffi->nlookup);
 
 	assert(fn->nlookup >= ffi->nlookup);
@@ -350,10 +350,13 @@ folly_forget(struct fvfs *fv)
 		gcrv =
 #endif
 		fops(fv)->gc(fv, fn);
+
+#ifdef _DIAG
+		if (gcrv == 0)
+			DIAG(fv, " #%llu zap!\n", finh(fv)->nodeid);
+#endif
 	} else
 		fn->nlookup -= ffi->nlookup;
-
-	DIAG(fv, "%s\n", gcrv == 0 ? ", zap!" : "");
 
 	return 0;
 }

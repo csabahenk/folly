@@ -89,6 +89,10 @@ nully_remove(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
 		pri(cfn)->inotify_wd = -1;
 	}
 	fops(fv)->remove(fn, cfn);
+
+	DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), pri(cfn)->name,
+	     fn2fi(fv, cfn));
+
 	if (pri(cfn)->negative)
 		fops(fv)->gc(fv, cfn);
 }
@@ -159,6 +163,8 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 	pri(cfn)->inotify_discard = 0;
 	pri(cfn)->name_external = 0;
 	pri(cfn)->negative = 0;
+
+	DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name, fn2fi(fv, cfn));
 
 	return cfn;
 }
@@ -264,12 +270,8 @@ nully_lookup(struct fvfs *fv, char *path)
 
 	if (rv == -1) {
 		if (errno == ENOENT) {
-			if (cfn) {
+			if (cfn)
 				nully_remove(fv, fn, cfn);
-
-				DIAG(fv, " #%llu/%s => (#%llu) X\n", fn2fi(fv, fn),
-				     name, fn2fi(fv, cfn));
-			}
 
 			/* add a negative entry both on our side and
 		         * on kernel's
@@ -280,8 +282,7 @@ nully_lookup(struct fvfs *fv, char *path)
 			pri(cfn)->negative = 1;
 			fops(fv)->insert_dirty(fn, cfn);
 
-			DIAG(fv, " #%llu/%s => #%llu -\n", fn2fi(fv, fn), name,
-			     fn2fi(fv, cfn));
+			DIAG(fv, " #%llu -\n", fn2fi(fv, cfn));
 
 			errno = 0;
 			memset(feo, 0, sizeof(*feo));
@@ -300,9 +301,6 @@ nully_lookup(struct fvfs *fv, char *path)
 			if (S_ISDIR(st.st_mode))
 				i_add_watch(fv, path, cfn);
 			fops(fv)->insert_dirty(fn, cfn);
-
-			DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
-			     fn2fi(fv, cfn));
 		}
 		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
@@ -396,9 +394,6 @@ link_entry(struct fvfs *fv, struct fnode *fn, struct stat *st, char *name,
 	cfn = insert_lookup_fnode(fv, fn, cfn);
 	pri(cfn)->negative = 0;
 	pri(cfn)->inotify_discard |= IN_CREATE;
-
-	DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
-	     fn2fi(fv, cfn));
 
 	memset(feo, sizeof(*feo) - sizeof(feo->attr), 0);
 	feo->nodeid = fn2fi(fv, cfn);
@@ -544,9 +539,6 @@ nully_unlink_generic(struct fvfs *fv, char *path,
 	if (cfn) {
 		assert( !pri(cfn)->negative );
 		nully_remove(fv, fn, cfn);
-
-		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), name,
-		     fn2fi(fv, cfn));
 	}
 
 	return send_fuse_data(fv, 0, errno);
@@ -622,17 +614,11 @@ nully_rename(struct fvfs *fv, char *path)
 		cfn = make_fnode_nully(fv, tfn, tname);
 		if (!cfn)
 			return send_fuse_err(fv, errno);
-
-		DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, tfn),
-		     tname, fn2fi(fv, cfn));
 	}
 	pri(cfn)->inotify_discard |= IN_MOVED_TO;
 
 	cfn2 = fops(fv)->insert(tfn, cfn);
 	if (cfn2) {
-		DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, tfn),
-		     tname, fn2fi(fv, cfn2));
-
 		nully_remove(fv, tfn, cfn2);
 		fops(fv)->insert_dirty(tfn, cfn);
 	}
@@ -880,28 +866,33 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 {
 	f_ino_t nid;
 	struct fnode *fn, *cfn;
+#ifdef _DIAG
 	char *path;
+#endif
 	int md;
 
 	fn = inotify_table[iev->wd];
 	assert(fn);
 	nid = fn2fi(fv, fn);
+#ifdef _DIAG
 	path = get_path(fv, nid, pbuf);
 
-	DIAG(fv, "INOTIFY: wd %d, mask %#x, name %s, len %d\n"
+	DIAG(fv, "INOTIFY wd %d mask %#x name %s len %d\n"
 	         " #%llu => %s\n",
 	         iev->wd, iev->mask, iev->name, iev->len,
 	         nid, path ? path : "??");
-
+#endif
 	cfn = fops(fv)->lookup(fn, iev->name);
 	if (cfn) {
 		DIAG(fv, " #%llu/%s => #%llu\n", nid, iev->name,
 		     fn2fi(fv, cfn));
 		md = iev->mask & ~pri(cfn)->inotify_discard;
 		pri(cfn)->inotify_discard &= ~iev->mask;
+#ifdef _DIAG
 		if (md != iev->mask)
-			DIAG(fv, " discarded events %#x, kept %#x\n",
+			DIAG(fv, " discarded events %#x kept %#x\n",
 			     iev->mask & ~md, md);
+#endif
 	} else {
 		DIAG(fv, " discarded b/c no node\n");
 
