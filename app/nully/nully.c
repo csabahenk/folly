@@ -43,6 +43,7 @@ static char inotbuf[1024];
 static char pbuf[PATH_MAX + NAME_MAX + 2];
 static nully_handler_t *nully_path_optable[FUSE_OPTABLE_SIZE];
 static struct fnode_ops *base_fnodeops;
+static struct fvfs *fv_global;
 
 struct nully_priv {
 	char *name;
@@ -81,14 +82,16 @@ i_add_watch(struct fvfs *fv, char *path, struct fnode *fn)
 }
 
 static void
-nully_remove(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
+nully_fnodeop_remove(struct fnode *fn, struct fnode *cfn)
 {
+	struct fvfs *fv = fv_global;
+
 	if (pri(cfn)->inotify_wd != -1) {
 		assert( !inotify_rm_watch(inotify_fd, pri(cfn)->inotify_wd) );
 		inotify_table[pri(cfn)->inotify_wd] = NULL;
 		pri(cfn)->inotify_wd = -1;
 	}
-	fops(fv)->remove(fn, cfn);
+	base_fnodeops->remove(fn, cfn);
 
 	DIAG(fv, " #%llu/%s => #%llu X\n", fn2fi(fv, fn), pri(cfn)->name,
 	     fn2fi(fv, cfn));
@@ -271,7 +274,7 @@ nully_lookup(struct fvfs *fv, char *path)
 	if (rv == -1) {
 		if (errno == ENOENT) {
 			if (cfn)
-				nully_remove(fv, fn, cfn);
+				fops(fv)->remove(fn, cfn);
 
 			/* add a negative entry both on our side and
 		         * on kernel's
@@ -538,7 +541,7 @@ nully_unlink_generic(struct fvfs *fv, char *path,
 	cfn = fops(fv)->lookup(fn, name);
 	if (cfn) {
 		assert( !pri(cfn)->negative );
-		nully_remove(fv, fn, cfn);
+		fops(fv)->remove(fn, cfn);
 	}
 
 	return send_fuse_data(fv, 0, errno);
@@ -595,7 +598,7 @@ nully_rename(struct fvfs *fv, char *path)
 		 * we can discard the induced inotify event.
 		 */
 
-		fops(fv)->remove(fn, cfn);
+		base_fnodeops->remove(fn, cfn);
 
 		if (strlen(tname) <= strlen(pri(cfn)->name))
 			strcpy(pri(cfn)->name, tname);
@@ -614,12 +617,13 @@ nully_rename(struct fvfs *fv, char *path)
 		cfn = make_fnode_nully(fv, tfn, tname);
 		if (!cfn)
 			return send_fuse_err(fv, errno);
+
 	}
 	pri(cfn)->inotify_discard |= IN_MOVED_TO;
 
 	cfn2 = fops(fv)->insert(tfn, cfn);
 	if (cfn2) {
-		nully_remove(fv, tfn, cfn2);
+		fops(fv)->remove(tfn, cfn2);
 		fops(fv)->insert_dirty(tfn, cfn);
 	}
 
@@ -801,7 +805,7 @@ nully_node_hash(void *p)
 }
 
 static int
-nully_gc(struct fvfs *fv, struct fnode *fn)
+nully_fnodeop_gc(struct fvfs *fv, struct fnode *fn)
 {
 	char *name = NULL;
 	int rv;
@@ -911,7 +915,7 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		revinval_entry(nid, iev->name);
 		if (errno)
 			return errno;
-		nully_remove(fv, fn, cfn);
+		fops(fv)->remove(fn, cfn);
 	}
 	if (md & IN_MODIFY) {
 		DIAG(fv, " MODIFY\n");
@@ -924,7 +928,7 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		revinval_entry(nid, iev->name);
 		if (errno)
 			return errno;
-		nully_remove(fv, fn, cfn);
+		fops(fv)->remove(fn, cfn);
 	}
 	if (md & IN_MOVED_TO) {
 		DIAG(fv, " MOVED_TO\n");
@@ -932,7 +936,7 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		if (errno)
 			return errno;
 		if (pri(cfn)->negative)
-			nully_remove(fv, fn, cfn);
+			fops(fv)->remove(fn, cfn);
 	}
 	if (md & IN_CREATE) {
 		assert( pri(cfn)->negative );
@@ -941,7 +945,7 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		revinval_entry(nid, iev->name);
 		if (errno)
 			return errno;
-		nully_remove(fv, fn, cfn);
+		fops(fv)->remove(fn, cfn);
 	}
 
 	return 0;
@@ -951,6 +955,7 @@ static int
 nully_prelude(struct fvfs *fv)
 {
 	i_add_watch(fv, ".", fv->root_fnode);
+	fv_global = fv;
 
 	return 0;
 }
@@ -1138,7 +1143,8 @@ main(int argc, char **argv)
 	/* closet OO */
 	memcpy(&nully_fnodeops, base_fnodeops,
 	       sizeof(struct fnode_ops));
-	nully_fnodeops.gc = nully_gc;
+	nully_fnodeops.remove = nully_fnodeop_remove;
+	nully_fnodeops.gc = nully_fnodeop_gc;
 	fvp.fops = &nully_fnodeops;
 
 	fvp.vfs_treedata = &vdat;
