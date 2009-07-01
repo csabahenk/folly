@@ -87,7 +87,7 @@ nully_fnodeop_remove(struct fnode *fn, struct fnode *cfn)
 	struct fvfs *fv = fv_global;
 
 	if (pri(cfn)->inotify_wd != -1) {
-		assert( !inotify_rm_watch(inotify_fd, pri(cfn)->inotify_wd) );
+		inotify_rm_watch(inotify_fd, pri(cfn)->inotify_wd);
 		inotify_table[pri(cfn)->inotify_wd] = NULL;
 		pri(cfn)->inotify_wd = -1;
 	}
@@ -876,7 +876,10 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 	int md;
 
 	fn = inotify_table[iev->wd];
-	assert(fn);
+	if (!fn)
+		return 0;
+	assert(pri(fn));
+	assert(pri(fn)->inotify_wd == iev->wd);
 	nid = fn2fi(fv, fn);
 #ifdef _DIAG
 	path = get_path(fv, nid, pbuf);
@@ -938,9 +941,7 @@ nully_inotify_handler(struct fvfs *fv, struct inotify_event *iev)
 		if (pri(cfn)->negative)
 			fops(fv)->remove(fn, cfn);
 	}
-	if (md & IN_CREATE) {
-		assert( pri(cfn)->negative );
-
+	if (md & IN_CREATE && pri(cfn)->negative) {
 		DIAG(fv, " CREATE\n");
 		revinval_entry(nid, iev->name);
 		if (errno)
@@ -1013,7 +1014,7 @@ transfer_loop(int infd, int outfd)
 		if (rv != fouh->len - sizeof(*fouh))
 			break;
 		rv = write(outfd, inval_buf, fouh->len);
-		if (rv != fouh->len)
+		if (rv != fouh->len && !(rv == -1 && errno == ENOENT))
 			break;
 	}
 }
