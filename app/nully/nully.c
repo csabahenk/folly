@@ -376,7 +376,7 @@ nully_open(struct fvfs *fv, char *path)
 	fd = open(path, foi->flags, foi->mode);
 
 	foo->fh = fd;
-	foo->open_flags = 0;
+	foo->open_flags = FOPEN_KEEP_CACHE;
 
 	return send_fuse_obj(fv, foo, errno);
 }
@@ -426,7 +426,7 @@ nully_create(struct fvfs *fv, char *path)
 	if (fd == -1)
 		return send_fuse_err(fv, errno);
 	foo->fh = fd;
-	foo->open_flags = 0;
+	foo->open_flags = FOPEN_KEEP_CACHE;
 	fstat(fd, &st);
 
 	return link_entry(fv, fn, &st, name, sizeof(*foo));
