@@ -83,10 +83,10 @@ i_add_watch(struct fvfs *fv, char *path, struct fnode *fn)
 static void
 nully_remove(struct fvfs *fv, struct fnode *fn, struct fnode *cfn)
 {
-	if (pri(cfn)->inotify_wd) {
+	if (pri(cfn)->inotify_wd != -1) {
 		assert( !inotify_rm_watch(inotify_fd, pri(cfn)->inotify_wd) );
-		inotify_table[pri(cfn)->inotify_wd] == NULL;
-		pri(cfn)->inotify_wd = 0;
+		inotify_table[pri(cfn)->inotify_wd] = NULL;
+		pri(cfn)->inotify_wd = -1;
 	}
 	fops(fv)->remove(fn, cfn);
 	if (pri(cfn)->negative)
@@ -155,7 +155,7 @@ make_fnode_nully(struct fvfs *fv, struct fnode *fn, char *name)
 	memcpy(pri(cfn) + 1, name, strlen(name) + 1);
 	pri(cfn)->name = (char *)(pri(cfn) + 1);
 	pri(cfn)->par_fn = fn;
-	pri(cfn)->inotify_wd = 0;
+	pri(cfn)->inotify_wd = -1;
 	pri(cfn)->inotify_discard = 0;
 	pri(cfn)->name_external = 0;
 	pri(cfn)->negative = 0;
@@ -1001,7 +1001,8 @@ nully_event_handler(struct fvfs *fv)
 	return 0;
 }
 
-static void transfer_loop(int infd, int outfd)
+static void
+transfer_loop(int infd, int outfd)
 {
 	struct fuse_out_header *fouh;
 	int rv;
@@ -1128,28 +1129,26 @@ main(int argc, char **argv)
 	vdat.compare = nully_node_cmp;
 	vdat.key = nully_node_key;
 	fnodeops_name = getenv("FOLLY_FNODEOPS");
-	if (fnodeops_name) {
-		if (strcmp(fnodeops_name, "list") == 0)
-			base_fnodeops = &list_fnode_ops;
-		else if (strcmp(fnodeops_name, "rb") == 0)
-			base_fnodeops = &rb_fnode_ops;
-		else if (strcmp(fnodeops_name, "hash") == 0) {
-			base_fnodeops = &hash_fnode_ops;
-			vdat.hash_table_size = 14507;
-			vdat.hash_table =
-			  calloc(vdat.hash_table_size, sizeof(struct fnode));
-			if (!vdat.hash_table)
-				err(1, "can't allocate hash table");
-			vdat.hash = nully_node_hash;
-		} else
-			errx(1, "unknown fnodeops \"%s\"", fnodeops_name);
+	if (!fnodeops_name || strcmp(fnodeops_name, "list") == 0)
+		base_fnodeops = &list_fnode_ops;
+	else if (strcmp(fnodeops_name, "rb") == 0)
+		base_fnodeops = &rb_fnode_ops;
+	else if (strcmp(fnodeops_name, "hash") == 0) {
+		base_fnodeops = &hash_fnode_ops;
+		vdat.hash_table_size = 14507;
+		vdat.hash_table =
+		  calloc(vdat.hash_table_size, sizeof(struct fnode));
+		if (!vdat.hash_table)
+			err(1, "can't allocate hash table");
+		vdat.hash = nully_node_hash;
+	} else
+		errx(1, "unknown fnodeops \"%s\"", fnodeops_name);
 
-		/* closet OO */
-		memcpy(&nully_fnodeops, base_fnodeops,
-		       sizeof(struct fnode_ops));
-		nully_fnodeops.gc = nully_gc;
-		fvp.fops = &nully_fnodeops;
-	}
+	/* closet OO */
+	memcpy(&nully_fnodeops, base_fnodeops,
+	       sizeof(struct fnode_ops));
+	nully_fnodeops.gc = nully_gc;
+	fvp.fops = &nully_fnodeops;
 
 	fvp.vfs_treedata = &vdat;
 	fvp.fuse_fd = fuse_fd;
