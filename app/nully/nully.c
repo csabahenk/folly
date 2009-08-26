@@ -376,7 +376,7 @@ static int
 nully_mkdir(struct fvfs *fv, char *path)
 {
 	struct fnode *fn = argnode(fv); 
-	struct fuse_mknod_in  *fmi = fuse_req_body(fv);
+	struct fuse_mkdir_in  *fmi = fuse_req_body(fv);
 	char *name = (char *)(fmi + 1);
 	struct stat st;
 	int rv;
