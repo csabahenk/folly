@@ -275,6 +275,8 @@ nully_readdir(struct fvfs *fv)
 		fde->ino = de->d_ino;
 #endif
 		fde->off = telldir(d);
+		if ((long)fde->off == -1)
+			return send_fuse_err(fv, errno);
 		fde->type = de->d_type;
 		strcpy((char *)fde + FUSE_NAME_OFFSET, de->d_name);
 		rem -= FUSE_DIRENT_SIZE(fde);
@@ -539,13 +541,13 @@ static int
 nully_read(struct fvfs *fv)
 {
 	struct fuse_read_in *fri = fuse_req_body(fv);
-	size_t bytes;
+	ssize_t bytes;
 
 	errno = 0;
 
 	bytes = pread(fri->fh, fuse_ans_body(fv), fri->size, fri->offset);
 
-	return send_fuse_data(fv, bytes, errno);
+	return send_fuse_data(fv, bytes == -1 ? 0 : bytes, errno);
 }
 
 static int
