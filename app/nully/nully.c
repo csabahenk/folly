@@ -742,7 +742,7 @@ nully_setattr(struct fvfs *fv, char *path)
 		if (rv != -1)
 			diev |= IN_ATTRIB;
 	}
-	if (rv != -1 && FATTR_SIZE) {
+	if (rv != -1 && fsi->valid & FATTR_SIZE) {
 		rv = truncate(path, fsi->size);
 		if (rv != -1)
 			diev |= IN_MODIFY;
