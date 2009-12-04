@@ -629,7 +629,7 @@ nully_setattr(struct fvfs *fv, char *path)
 		rv = chown(path,
 		           fsi->valid & FATTR_UID ? fsi->uid : -1,
 		           fsi->valid & FATTR_GID ? fsi->gid : -1);
-	if (rv != -1 && FATTR_SIZE)
+	if (rv != -1 && fsi->valid & FATTR_SIZE)
 		rv = truncate(path, fsi->size);
 	if (rv != -1 &&
 	    (fsi->valid & (FATTR_ATIME|FATTR_MTIME)) == (FATTR_ATIME|FATTR_MTIME)) {
