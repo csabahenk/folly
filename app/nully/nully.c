@@ -17,6 +17,9 @@
 #include <dirent.h>
 #include <err.h>
 #include <assert.h>
+#ifdef linux
+#include <attr/xattr.h>
+#endif
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -661,6 +664,75 @@ nully_readlink(struct fvfs *fv, char *path)
 	return send_fuse_data(fv, bytes + 1, errno);
 }
 
+#ifdef linux
+static int
+nully_getxattr_generic(struct fvfs *fv, char *path,
+                       ssize_t (getxattrlike)(const char *path, const char *name,
+                                              void *buf, size_t size))
+{
+	struct fuse_getxattr_in *fgxi = fuse_req_body(fv);
+	char *name = (char *)(fgxi + 1);
+	struct fuse_getxattr_out *fgxo = fuse_ans_body(fv);
+	ssize_t size;
+
+	if (sizeof(struct fuse_out_header) + fgxi->size > fv->parm.outbufsize)
+		return send_fuse_err(fv, E2BIG);
+
+	size = getxattrlike(path, name, size ? fuse_ans_body(fv) : NULL, fgxi->size);
+	if (size == -1)
+		return send_fuse_err(fv, errno);
+	if (fgxi->size)
+		return send_fuse_data(fv, size, size > fgxi->size ? ERANGE : 0);
+	fgxo->size = size;
+	return send_fuse_obj(fv, fgxo, 0);
+}
+
+static ssize_t
+llistxattr_wrap(const char *path, const char *name, void *buf, size_t size)
+{
+	return llistxattr(path, buf, size);
+}
+
+static int
+nully_listxattr(struct fvfs *fv, char *path)
+{
+	return nully_getxattr_generic(fv, path, llistxattr_wrap);
+}
+
+
+static int
+nully_getxattr(struct fvfs *fv, char *path)
+{
+	return nully_getxattr_generic(fv, path, lgetxattr);
+}
+
+static int
+nully_removexattr(struct fvfs *fv, char *path)
+{
+	char *name = fuse_req_body(fv);
+
+	errno = 0;
+
+	lremovexattr(path, name);
+
+	return send_fuse_err(fv, errno);
+}
+
+static int
+nully_setxattr(struct fvfs *fv, char *path)
+{
+	struct fuse_setxattr_in *fsi = fuse_req_body(fv);
+	char *name = (char *)(fsi + 1);
+	char *value = name + strlen (name) + 1;
+
+	errno = 0;
+
+	lsetxattr(path, name, value, fsi->size, fsi->flags);
+
+	return send_fuse_err(fv, errno);
+}
+#endif
+
 static int
 nully_node_cmp(struct fnode *fn, void *p)
 {
@@ -708,6 +780,12 @@ static struct nully_handler_spec nully_path_opmap[] = {
 	{ FUSE_RENAME,      nully_rename   },
 	{ FUSE_ACCESS,      nully_access   },
 	{ FUSE_READLINK,    nully_readlink },
+#ifdef linux
+	{ FUSE_LISTXATTR,   nully_listxattr },
+	{ FUSE_GETXATTR,    nully_getxattr },
+	{ FUSE_SETXATTR,    nully_setxattr },
+	{ FUSE_REMOVEXATTR, nully_removexattr },
+#endif
 	{0,                 0              }
 };
 
