@@ -375,7 +375,7 @@ nully_open(struct fvfs *fv, char *path)
 	struct fuse_open_out *foo = fuse_ans_body(fv);
 	int fd;
 
-	fd = open(path, foi->flags, foi->mode);
+	fd = open(path, foi->flags);
 
 	foo->fh = fd;
 	foo->open_flags = FOPEN_KEEP_CACHE;
@@ -413,8 +413,8 @@ static int
 nully_create(struct fvfs *fv, char *path)
 {
 	struct fnode *fn = argnode(fv); 
-	struct fuse_open_in *foi = fuse_req_body(fv);
-	char *name = (char *)(foi + 1);
+	struct fuse_create_in *fci = fuse_req_body(fv);
+	char *name = (char *)(fci + 1);
 	struct fuse_open_out *foo =
 	  (struct fuse_open_out *)((struct fuse_entry_out *)fuse_ans_body(fv) + 1);
 	struct stat st;
@@ -424,7 +424,7 @@ nully_create(struct fvfs *fv, char *path)
 	if (rv)
 		return send_fuse_err(fv, rv);
 
-	fd = open(path, foi->flags | O_CREAT|O_EXCL, foi->mode);
+	fd = open(path, fci->flags | O_CREAT|O_EXCL, fci->mode);
 	if (fd == -1)
 		return send_fuse_err(fv, errno);
 	foo->fh = fd;
