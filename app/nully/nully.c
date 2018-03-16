@@ -1,5 +1,5 @@
 #ifdef linux
-#define _XOPEN_SOURCE 500
+#define _XOPEN_SOURCE 700
 #define _FILE_OFFSET_BITS 64
 #endif
 
@@ -188,21 +188,13 @@ nully_getattr(struct fvfs *fv, char *path)
 	return send_fuse_obj(fv, fao, errno);
 }
 
-static int
-nully_lookup(struct fvfs *fv, char *path)
+struct fnode *
+nully_lookup_i(struct fvfs *fv, struct stat *st, int rv,
+	       char *name, struct fuse_entry_out *feo)
 {
 	struct fnode *fn = argnode(fv);
 	struct fnode *cfn;
-	char *name = fuse_req_body(fv);
-	struct fuse_entry_out *feo = fuse_ans_body(fv);
-	struct stat st;
-	int rv;
 
-	rv = pathappend(path, name);
-	if (rv)
-		return send_fuse_err(fv, rv);
-
-	rv = lstat(path, &st);
 	cfn = fops(fv)->lookup(fn, name);
 
 	if (rv == -1) {
@@ -213,6 +205,7 @@ nully_lookup(struct fvfs *fv, char *path)
 			     name, fn2fi(fv, cfn));
 		} else
 			DIAG(fv, " #%llu/%s => ??\n", fn2fi(fv, fn), name);
+		return NULL;
 	} else {
 		if (cfn) {
 			cfn->nlookup++;
@@ -222,7 +215,7 @@ nully_lookup(struct fvfs *fv, char *path)
 		} else {
 			cfn = make_fnode_nully(fv, fn, name);
 			if (!cfn)
-				return send_fuse_err(fv, errno);
+				return NULL;
 			fops(fv)->insert_dirty(fn, cfn);
 
 			DIAG(fv, " #%llu/%s => #%llu !\n", fn2fi(fv, fn), name,
@@ -230,9 +223,26 @@ nully_lookup(struct fvfs *fv, char *path)
 		}
 		memset(feo, 0, sizeof(*feo) - sizeof(feo->attr));
 		feo->nodeid = fn2fi(fv, cfn);
-		stat2attr(&st, feo);
+		stat2attr(st, feo);
 	}
 
+	return cfn;
+}
+
+static int
+nully_lookup(struct fvfs *fv, char *path)
+{
+	char *name = fuse_req_body(fv);
+	struct fuse_entry_out *feo = fuse_ans_body(fv);
+	struct stat st;
+	int rv;
+
+	rv = pathappend(path, name);
+	if (rv)
+		return send_fuse_err(fv, rv);
+
+	rv = lstat(path, &st);
+	nully_lookup_i(fv, &st, rv, name, feo);
 	return send_fuse_obj(fv, feo, errno);
 }
 
@@ -303,6 +313,10 @@ nully_readdirplus(struct fvfs *fv)
 	seekdir(d, fri->offset);
 
 	for (;;) {
+		struct fnode *cfn;
+		struct stat st;
+		int rv;
+
 		if (rem < sizeof(*fdep))
 			break;
 		de = readdir(d);
@@ -320,7 +334,11 @@ nully_readdirplus(struct fvfs *fv)
 		if ((long)fdep->dirent.off == -1)
 			return send_fuse_err(fv, errno);
 		fdep->dirent.type = de->d_type;
-		memset(&fdep->entry_out, 0, sizeof(fdep->entry_out));
+
+		rv = fstatat(dirfd(d), de->d_name, &st, AT_SYMLINK_NOFOLLOW);
+		if (!nully_lookup_i(fv, &st, rv, de->d_name, &fdep->entry_out))
+			memset(&fdep->entry_out, 0, sizeof(fdep->entry_out));
+
 		strcpy((char *)fdep + FUSE_NAME_OFFSET_DIRENTPLUS, de->d_name);
 		rem -= FUSE_DIRENTPLUS_SIZE(fdep);
 		fdep = (struct fuse_direntplus *)((char *)fdep + FUSE_DIRENTPLUS_SIZE(fdep));
