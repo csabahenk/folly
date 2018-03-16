@@ -290,6 +290,46 @@ nully_readdir(struct fvfs *fv)
 }
 
 static int
+nully_readdirplus(struct fvfs *fv)
+{
+	struct fuse_read_in *fri = fuse_req_body(fv);
+	DIR *d = (DIR *)(uintptr_t)fri->fh;
+	struct fuse_direntplus *fdep = fuse_ans_body(fv);
+	struct dirent *de;
+	size_t rem = fri->size;
+
+	errno = 0;
+
+	seekdir(d, fri->offset);
+
+	for (;;) {
+		if (rem < sizeof(*fdep))
+			break;
+		de = readdir(d);
+		if (!de)
+			break;
+		fdep->dirent.namelen = strlen(de->d_name);
+		if (rem < FUSE_DIRENTPLUS_SIZE(fdep))
+			break;
+#ifdef __FreeBSD__
+		fdep->dirent.ino = de->d_fileno;
+#else
+		fdep->dirent.ino = de->d_ino;
+#endif
+		fdep->dirent.off = telldir(d);
+		if ((long)fdep->dirent.off == -1)
+			return send_fuse_err(fv, errno);
+		fdep->dirent.type = de->d_type;
+		memset(&fdep->entry_out, 0, sizeof(fdep->entry_out));
+		strcpy((char *)fdep + FUSE_NAME_OFFSET_DIRENTPLUS, de->d_name);
+		rem -= FUSE_DIRENTPLUS_SIZE(fdep);
+		fdep = (struct fuse_direntplus *)((char *)fdep + FUSE_DIRENTPLUS_SIZE(fdep));
+	}
+
+	return send_fuse_data(fv, fri->size - rem, errno);
+}
+
+static int
 nully_open(struct fvfs *fv, char *path)
 {
 	struct fuse_open_in  *foi = fuse_req_body(fv);
@@ -791,6 +831,7 @@ static struct nully_handler_spec nully_path_opmap[] = {
 
 static struct handler_spec nully_opmap[] = {
 	{ FUSE_READDIR,     nully_readdir    },
+	{ FUSE_READDIRPLUS, nully_readdirplus},
 	{ FUSE_READ,        nully_read       },
 	{ FUSE_WRITE,       nully_write      },
 	{ FUSE_FLUSH,       nully_flush      },
@@ -857,6 +898,7 @@ main(int argc, char **argv)
 
 	fvp.vfs_treedata = &vdat;
 	fvp.fuse_fd = acquire_fuse_fd();
+	fvp.finit_out.flags |= FUSE_DO_READDIRPLUS;
 
 	/* go! */
 	folly_loop(&fvp);
